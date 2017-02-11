@@ -250,6 +250,7 @@ def gdalenv(request):
             rasterio.env.delenv()
             rasterio.env._env = None
     request.addfinalizer(fin)
+    return rasterio.Env()
 
 
 @pytest.fixture(scope='module')

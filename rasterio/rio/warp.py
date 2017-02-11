@@ -1,15 +1,13 @@
 """$ rio warp"""
 
-import logging
-from math import ceil, floor, log
-import warnings
+
+from math import ceil
 
 import click
 from cligj import files_inout_arg, format_opt
 
 import rasterio
 from rasterio.crs import CRS
-from rasterio.env import setenv
 from rasterio.errors import CRSError
 from rasterio.rio import options
 from rasterio.rio.helpers import resolve_inout
@@ -132,8 +130,8 @@ def warp(ctx, files, output, driver, like, dst_crs, dimensions, src_bounds,
             raise click.BadParameter(
                 "--dimensions cannot be used with --bounds or --res")
 
-    with ctx.obj['env']:
-        setenv(CHECK_WITH_INVERT_PROJ=check_invert_proj)
+    with ctx.obj['env'] as env:
+        env.set(CHECK_WITH_INVERT_PROJ=check_invert_proj)
 
         with rasterio.open(files[0]) as src:
             l, b, r, t = src.bounds

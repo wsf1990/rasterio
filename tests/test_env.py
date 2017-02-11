@@ -10,7 +10,7 @@ import pytest
 
 import rasterio
 from rasterio._env import del_gdal_config, get_gdal_config, set_gdal_config
-from rasterio.env import defenv, delenv, getenv, setenv, ensure_env
+from rasterio.env import defenv, delenv, getenv, ensure_env
 from rasterio.env import default_options
 from rasterio.errors import EnvError
 from rasterio.rio.main import main_group
@@ -41,32 +41,10 @@ def test_gdal_config_accessers():
     assert get_gdal_config('foo') is None
 
 
-# The 'gdalenv' fixture ensures that gdal configuration is deleted
-# at the end of the test, making tests as isolates as GDAL allows.
-
-def test_env_accessors(gdalenv):
-    """High level GDAL env access."""
-    defenv()
-    setenv(foo='1', bar='2')
-    expected = default_options.copy()
-    expected.update({'foo': '1', 'bar': '2'})
-    assert getenv() == rasterio.env._env.options
-    assert getenv() == expected
-    assert get_gdal_config('foo') == '1'
-    assert get_gdal_config('bar') == '2'
-    delenv()
-    with pytest.raises(EnvError):
-        getenv()
-    assert get_gdal_config('foo') is None
-    assert get_gdal_config('bar') is None
-
-
 def test_env_accessors_no_env():
     """Sould all raise an exception."""
     with pytest.raises(EnvError):
         delenv()
-    with pytest.raises(EnvError):
-        setenv()
     with pytest.raises(EnvError):
         getenv()
 
