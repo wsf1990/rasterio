@@ -149,7 +149,7 @@ class Env(object):
             self.context_options = {}
         else:
             self._has_parent_env = True
-            self.context_options = getenv()
+            self.context_options = self.getenv()
         self.set(**self.options)
         log.debug("Entered env context: %r", self)
         return self
@@ -168,6 +168,15 @@ class Env(object):
         _env.update_config_options(**options)
         log.debug("Updated existing %r with options %r", _env, options)
 
+    def getenv(self):
+        """Get a mapping of current options."""
+        global _env
+        if not _env:
+            raise EnvError("No GDAL environment exists")
+        else:
+            log.debug("Got a copy of environment %r options", _env)
+            return _env.options.copy()
+
 
 def defenv():
     """Create a default environment if necessary."""
@@ -181,16 +190,6 @@ def defenv():
         log.debug(
             "New GDAL environment %r created", _env)
     _env.start()
-
-
-def getenv():
-    """Get a mapping of current options."""
-    global _env
-    if not _env:
-        raise EnvError("No GDAL environment exists")
-    else:
-        log.debug("Got a copy of environment %r options", _env)
-        return _env.options.copy()
 
 
 def delenv():
