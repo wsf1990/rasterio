@@ -59,10 +59,6 @@ cdef void logging_error_handler(CPLErr err_class, int err_no,
     else:
         log.info("Unknown error number %r", err_no)
 
-def driver_count():
-    """Return the count of all drivers"""
-    return GDALGetDriverCount() + OGRGetDriverCount()
-
 
 cpdef get_gdal_config(key):
     """Get the value of a GDAL configuration option"""
@@ -95,48 +91,66 @@ cpdef del_gdal_config(key):
     CPLSetConfigOption(<const char *>key, NULL)
 
 
-cdef class ConfigEnv(object):
-    """Configuration option management"""
+cdef class GDALEnv(object):
 
-    cdef public object options
+    cdef public object _config_options
 
     def __init__(self, **options):
-        self.options = {}
-        self.update_config_options(**self.options)
+        self._config_options = options.copy()
 
-    def update_config_options(self, **kwargs):
-        """Update GDAL config options."""
-        for key, val in kwargs.items():
+    def update(self, **options):
+        for key, val in options.items():
             set_gdal_config(key, val)
-            self.options[key] = val
-            # Redact AWS credentials for logs
-            if key.upper() in ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
-                               'AWS_SESSION_TOKEN']:
-                val = '******'
-            log.debug("Set option %s=%s in env %r", key, val, self)
+            self._config_options[key] = val
 
-    def clear_config_options(self):
-        """Clear GDAL config options."""
-        while self.options:
-            key, val = self.options.popitem()
+    def unset_all(self):
+        while self._config_options:
+            key, val = self._config_options.popitem()
             del_gdal_config(key)
             log.debug("Unset option %s in env %r", key, self)
 
+    def set_config(self, key, value):
+        set_gdal_config(key, value)
+        self._config_options[key] = value
 
-cdef class GDALEnv(ConfigEnv):
-    """Configuration and driver management"""
+    def get_config(self, key):
+        return get_gdal_config(key)
 
-    def __init__(self, **options):
-        super(GDALEnv, self).__init__(**options)
+    def del_config(self, key):
+        del_gdal_config(key)
+        self._config_options.pop(key)
 
-    def start(self):
+    def update(self, **options):
+        for key, val in options.items():
+            self.set_config(key, val)
+            # Redact AWS credentials for logs
+            if key.upper() in ['AWS_ACCESS_KEY_ID',
+                               'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']:
+                val = '******'
+            log.debug("Set option %s=%s in env %r", key, val, self)
+
+    @property
+    def drivers(self):
+        cdef GDALDriverH driver = NULL
+        cdef int i
+
+        result = {}
+        for i in range(GDALGetDriverCount()):
+            driver = GDALGetDriver(i)
+            key = GDALGetDriverShortName(driver)
+            val = GDALGetDriverLongName(driver)
+            result[key] = val
+
+        return result
+
+    def _start(self):
         CPLPushErrorHandler(<CPLErrorHandler>logging_error_handler)
         log.debug("Logging error handler pushed.")
         GDALAllRegister()
         OGRRegisterAll()
         log.debug("All drivers registered.")
 
-        if driver_count() == 0:
+        if GDALGetDriverCount() + OGRGetDriverCount() == 0:
             CPLPopErrorHandler()
             log.debug("Error handler popped")
             raise ValueError("Drivers not registered.")
@@ -154,27 +168,15 @@ cdef class GDALEnv(ConfigEnv):
             whl_datadir = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "proj_data"))
             os.environ['PROJ_LIB'] = whl_datadir
-
+        self.update(**self._config_options)
         log.debug("Started GDALEnv %r.", self)
 
-    def stop(self):
+    def _stop(self):
         # NB: do not restore the CPL error handler to its default
         # state here. If you do, log messages will be written to stderr
         # by GDAL instead of being sent to Python's logging module.
+        self.unset_all()
         log.debug("Stopping GDALEnv %r.", self)
         CPLPopErrorHandler()
         log.debug("Error handler popped.")
         log.debug("Stopped GDALEnv %r.", self)
-
-    def drivers(self):
-        cdef GDALDriverH driver = NULL
-        cdef int i
-
-        result = {}
-        for i in range(GDALGetDriverCount()):
-            driver = GDALGetDriver(i)
-            key = GDALGetDriverShortName(driver)
-            val = GDALGetDriverLongName(driver)
-            result[key] = val
-
-        return result
