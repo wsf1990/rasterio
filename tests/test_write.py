@@ -286,7 +286,7 @@ def test_write_blacklist(tmpdir, driver):
 
     # Skip if we don't have driver support built in.
     with Env() as env:
-        if driver not in env.drivers():
+        if driver not in env.drivers:
             pytest.skip()
 
     name = str(tmpdir.join("data.test"))
