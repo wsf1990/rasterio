@@ -1,21 +1,18 @@
 import logging
 
 import rasterio
-from rasterio._env import driver_count
 
 
 def test_drivers():
     with rasterio.Env() as m:
-        assert driver_count() > 0
+        assert len(m.drivers) > 0
         assert type(m) == rasterio.Env
-    assert driver_count() > 0
 
 
 def test_drivers_bwd_compat():
     with rasterio.Env() as m:
-        assert driver_count() > 0
+        assert len(m.drivers) > 0
         assert type(m) == rasterio.Env
-    assert driver_count() > 0
 
 
 def test_cpl_debug_true(tmpdir):

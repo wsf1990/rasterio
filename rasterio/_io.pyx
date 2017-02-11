@@ -6,16 +6,13 @@ from __future__ import absolute_import
 import logging
 import os
 import os.path
-import sys
 import uuid
 import warnings
 
 import numpy as np
 
-from rasterio._base import tastes_like_gdal
-from rasterio._env import driver_count, GDALEnv
 from rasterio._err import (
-    GDALError, CPLE_OpenFailedError, CPLE_IllegalArgError)
+    CPLE_OpenFailedError, CPLE_IllegalArgError)
 from rasterio.crs import CRS
 from rasterio.compat import text_type, string_types
 from rasterio import dtypes

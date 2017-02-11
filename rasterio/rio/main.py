@@ -31,6 +31,7 @@ so that other ``rio`` users may find it.
 """
 
 
+import itertools as it
 import logging
 from pkg_resources import iter_entry_points
 import sys
@@ -55,8 +56,9 @@ def gdal_version_cb(ctx, param, value):
     ctx.exit()
 
 
-@with_plugins(ep for ep in list(iter_entry_points('rasterio.rio_commands')) +
-              list(iter_entry_points('rasterio.rio_plugins')))
+@with_plugins(it.chain(
+    iter_entry_points('rasterio.rio_commands'),
+    iter_entry_points('rasterio.rio_plugins')))
 @click.group()
 @cligj.verbose_opt
 @cligj.quiet_opt
