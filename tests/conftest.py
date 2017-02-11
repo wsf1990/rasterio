@@ -241,18 +241,6 @@ def pixelated_image_file(tmpdir, pixelated_image):
     return outfilename
 
 
-@pytest.fixture(scope='function')
-def gdalenv(request):
-    import rasterio.env
-
-    def fin():
-        if rasterio.env._env:
-            rasterio.env.delenv()
-            rasterio.env._env = None
-    request.addfinalizer(fin)
-    return rasterio.Env()
-
-
 @pytest.fixture(scope='module')
 def path_rgb_byte_tif():
     return os.path.join('tests', 'data', 'RGB.byte.tif')
