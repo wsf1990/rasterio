@@ -34,9 +34,8 @@ def test_identity():
         5009377.085697309)
     transform = from_bounds(left, bottom, right, top, width, height)
 
-    with rasterio.Env():
-        res_transform, res_width, res_height = _calculate_default_transform(
-            src_crs, dst_crs, width, height, left, bottom, right, top)
+    res_transform, res_width, res_height = _calculate_default_transform(
+        src_crs, dst_crs, width, height, left, bottom, right, top)
 
     assert res_width == width
     assert res_height == height
