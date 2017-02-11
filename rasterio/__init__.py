@@ -18,7 +18,7 @@ from rasterio.drivers import is_blacklisted
 from rasterio.dtypes import (
     bool_, ubyte, uint8, uint16, int16, uint32, int32, float32, float64,
     complex_, check_dtype)
-from rasterio.env import ensure_env, Env
+from rasterio.env import ensure_env, _current_env, Env
 from rasterio.errors import RasterioIOError
 from rasterio.compat import string_types
 from rasterio.io import (
@@ -66,6 +66,7 @@ log = logging.getLogger(__name__)
 log.addHandler(NullHandler())
 
 
+@ensure_env
 def open(fp, mode='r', driver=None, width=None, height=None,
          count=None, crs=None, transform=None, dtype=None, nodata=None,
          **kwargs):
@@ -239,36 +240,35 @@ def open(fp, mode='r', driver=None, width=None, height=None,
         # The 'normal' filename path.
         _, _, scheme = parse_path(fp)
 
-        with Env() as env:
-            # Get AWS credentials only if we're attempting to access a
-            # raster using the S3 scheme.
-            if scheme == 's3':
-                env.get_aws_credentials()
-                log.debug("AWS credentials have been obtained")
+        # Get AWS credentials only if we're attempting to access a
+        # raster using the S3 scheme.
+        if scheme == 's3':
+            _current_env().auth_aws()
+            log.debug("AWS credentials have been obtained")
 
-            # Create dataset instances and pass the given env, which will
-            # be taken over by the dataset's context manager if it is not
-            # None.
-            if mode == 'r':
-                s = DatasetReader(fp)
-            elif mode == 'r-':
-                warnings.warn("'r-' mode is deprecated, use 'r'",
-                              DeprecationWarning)
-                s = DatasetReader(fp)
-            elif mode == 'r+':
-                s = get_writer_for_path(fp)(fp, mode)
-            elif mode == 'w':
-                s = get_writer_for_driver(driver)(fp, mode, driver=driver,
-                                                  width=width, height=height,
-                                                  count=count, crs=crs,
-                                                  transform=transform,
-                                                  dtype=dtype, nodata=nodata,
-                                                  **kwargs)
-            else:
-                raise ValueError(
-                    "mode must be one of 'r', 'r+', or 'w', not %s" % mode)
-            s.start()
-            return s
+        # Create dataset instances and pass the given env, which will
+        # be taken over by the dataset's context manager if it is not
+        # None.
+        if mode == 'r':
+            s = DatasetReader(fp)
+        elif mode == 'r-':
+            warnings.warn("'r-' mode is deprecated, use 'r'",
+                          DeprecationWarning)
+            s = DatasetReader(fp)
+        elif mode == 'r+':
+            s = get_writer_for_path(fp)(fp, mode)
+        elif mode == 'w':
+            s = get_writer_for_driver(driver)(fp, mode, driver=driver,
+                                              width=width, height=height,
+                                              count=count, crs=crs,
+                                              transform=transform,
+                                              dtype=dtype, nodata=nodata,
+                                              **kwargs)
+        else:
+            raise ValueError(
+                "mode must be one of 'r', 'r+', or 'w', not %s" % mode)
+        s.start()
+        return s
 
 
 @ensure_env
