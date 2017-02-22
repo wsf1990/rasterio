@@ -25,7 +25,7 @@ class Env(GDALEnv):
                  aws_secret_access_key=None, aws_session_token=None,
                  aws_region_name=None, aws_profile_name=None, **options):
 
-        super(Env, self).__init__(**options)
+        super(Env, self).__init__()
 
         if ('AWS_ACCESS_KEY_ID' in options or
                 'AWS_SECRET_ACCESS_KEY' in options):
@@ -34,6 +34,10 @@ class Env(GDALEnv):
                 "AWS credentials are handled exclusively by boto3.")
 
         self._parent_config_options = None
+
+        # These aren't populated until __enter__ so they need to live
+        # somewhere
+        self._init_options = options.copy()
 
         self.aws_session = aws_session
         self.aws_access_key_id = aws_access_key_id
@@ -61,17 +65,13 @@ class Env(GDALEnv):
 
         # Pass these credentials to the GDAL environment.
         if self._aws_creds.access_key:  # pragma: no branch
-            self['aws_access_key_id'] = self._aws_creds.access_key
+            self.set_config(aws_access_key_id=self._aws_creds.access_key)
         if self._aws_creds.secret_key:  # pragma: no branch
-            self['aws_secret_access_key'] = self._aws_creds.secret_key
+            self.set_config(aws_secret_access_key=self._aws_creds.secret_key)
         if self._aws_creds.token:
-            self['aws_session_token'] = self._aws_creds.token
+            self.set_config(aws_session_token=self._aws_creds.token)
         if self.aws_session.region_name:
-            self['aws_region'] = self.aws_session.region_name
-
-    @property
-    def config_options(self):
-        return self._config_options.copy()
+            self.set_config(aws_region=self.aws_session.region_name)
 
     @staticmethod
     def default_options():
@@ -93,6 +93,7 @@ class Env(GDALEnv):
             self._parent_config_options = _ENV.config_options.copy()
             _ENV.close()
         self._start()
+        self.set_config(**self._init_options)
         _ENV = self
         return self
 
@@ -112,7 +113,7 @@ class Env(GDALEnv):
         return self.get_config(key)
 
     def __setitem__(self, key, value):
-        self.set_config(key, value)
+        self.set_config(key=value)
 
     def __delitem__(self, key):
         self.del_config(key)

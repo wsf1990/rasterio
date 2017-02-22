@@ -93,44 +93,131 @@ cpdef del_gdal_config(key):
 
 cdef class GDALEnv(object):
 
-    cdef public object _config_options
+    """A bridge between Rasterio and the GDAL environment."""
 
-    def __init__(self, **options):
-        self._config_options = options.copy()
+    cdef public object _set_config_options
+    cdef bint _active
 
-    def update(self, **options):
+    def __init__(self):
+        """This class provides methods for Rasterio to interact with and
+        manage GDAL's environment.  Config options can be set once
+        ``GDALEnv._start()`` has been called.
+        """
+        self._set_config_options = set()
+        self._active = False
+
+    def _ensure_active(self):
+        """Ensure's ``GDALEnv()`` has been activated before setting config
+        options.
+        """
+        if not self._active:
+            raise EnvironmentError(
+                "A Rasterio managed GDAL environment is not active.")
+
+    @property
+    def config_options(self):
+        """Returns a dictionary containing the currently set GDAL config
+        options.
+
+        Returns
+        -------
+        dict
+            Like: ``{'CHECK_WITH_INVERT_PROJ: True}``.
+        """
+        out = {}
+        for key in self._set_config_options:
+            val = self.get_config(key)
+            if val is not None:
+                out[key] = val
+        return out
+
+    def _redact_val(self, key, val):
+        """Some config options store sensitive information that shouldn't
+        be logged.  This method is aware of these options and modifies the
+        value.
+
+        For example:
+
+            >>> key = 'AWS_SECRET_ACCESS_KEY'
+            >>> val = '<actual secret access key>'
+            >>> print(_redact_val(key, val))
+            ('AWS_SECRET_ACCESS_KEY', '******')
+
+        Parameters
+        ----------
+        key : str
+            GDAL config option name.
+        val : str or None
+            Config option value.
+
+        Returns
+        -------
+        tuple
+            ``(key, val)`` where ``val`` may be converted to ``'******'``.
+        """
+        if key.upper() in ['AWS_ACCESS_KEY_ID',
+                               'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']:
+            val = '******'
+        return key, val
+
+    def clear_config(self):
+        """Clear all config options."""
+        while self._set_config_options:
+            key = self._set_config_options.pop()
+            del_gdal_config(key)
+
+    def set_config(self, **options):
+        """Set GDAL config options.
+
+        Parameters
+        ----------
+        options : **kwargs
+            Like: ``name=value``.
+        """
+        self._ensure_active()
         for key, val in options.items():
             set_gdal_config(key, val)
-            self._config_options[key] = val
-
-    def unset_all(self):
-        while self._config_options:
-            key, val = self._config_options.popitem()
-            del_gdal_config(key)
-            log.debug("Unset option %s in env %r", key, self)
-
-    def set_config(self, key, value):
-        set_gdal_config(key, value)
-        self._config_options[key] = value
+            self._set_config_options.add(key)
+            key, val = self._redact_val(key, val)
+            log.debug("Set option '%s=%s' in env %r", key, val, self)
 
     def get_config(self, key):
+        """Get a config option's value from the GDAL environment.
+
+        Parameters
+        ----------
+        key : str
+            Config option name.
+
+        Returns
+        -------
+        str or None
+            Will be ``None`` if not set.
+        """
+        self._ensure_active()
         return get_gdal_config(key)
 
     def del_config(self, key):
-        del_gdal_config(key)
-        self._config_options.pop(key)
+        """Remove a config option from the GDAL environment.
 
-    def update(self, **options):
-        for key, val in options.items():
-            self.set_config(key, val)
-            # Redact AWS credentials for logs
-            if key.upper() in ['AWS_ACCESS_KEY_ID',
-                               'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']:
-                val = '******'
-            log.debug("Set option %s=%s in env %r", key, val, self)
+        Parameters
+        ----------
+        key : str
+            Config option name.
+        """
+        self._ensure_active()
+        del_gdal_config(key)
+        log.debug("Deleted config option '%s' in env %r", key, self)
 
     @property
     def drivers(self):
+        """A mapping of GDAL driver short names to long names.
+
+        Returns
+        -------
+        dict
+            Like: ``{'GTiff': 'GeoTIFF'}``.
+        """
         cdef GDALDriverH driver = NULL
         cdef int i
 
@@ -144,6 +231,10 @@ cdef class GDALEnv(object):
         return result
 
     def _start(self):
+        """Start the GDAL environment by pushing the Rasterio error handler,
+        registering both GDAL and OGR drivers, discovering ``GDAL_DATA``,
+        and setting whatever initial environment options were
+        """
         CPLPushErrorHandler(<CPLErrorHandler>logging_error_handler)
         log.debug("Logging error handler pushed.")
         GDALAllRegister()
@@ -168,15 +259,19 @@ cdef class GDALEnv(object):
             whl_datadir = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "proj_data"))
             os.environ['PROJ_LIB'] = whl_datadir
-        self.update(**self._config_options)
         log.debug("Started GDALEnv %r.", self)
+        self._active = True
 
     def _stop(self):
+        """Stop the GDAL environment by removing Rasterio's error handler
+        and clearing the config options.  The drivers are left untouched.
+        """
         # NB: do not restore the CPL error handler to its default
         # state here. If you do, log messages will be written to stderr
         # by GDAL instead of being sent to Python's logging module.
-        self.unset_all()
+        self.clear_config()
         log.debug("Stopping GDALEnv %r.", self)
         CPLPopErrorHandler()
         log.debug("Error handler popped.")
         log.debug("Stopped GDALEnv %r.", self)
+        self._active = False

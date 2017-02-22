@@ -58,13 +58,11 @@ def test_no_aws_gdal_config():
 def test_env_defaults():
     """Test env defaults."""
     env = rasterio.Env.from_defaults(foo='x')
-    # Variable has not yet been set in the GDAL environment
-    assert env['foo'] is None
-    # This is where the environment's config options are tracked, so
-    # it is set here.
-    assert env.config_options['foo'] == 'x'
-    assert env._parent_config_options is None
-    with env as e:
+    # The GDAL environment has not yet been started, so this should raise
+    # an exception
+    with pytest.raises(EnvironmentError):
+        env.get_config('foo')
+    with env:
         assert env['CHECK_WITH_INVERT_PROJ'] is True
         assert env['GTIFF_IMPLICIT_JPEG_OVR'] is False
         assert env["DEFAULT_RASTERIO_ENV"] is True
