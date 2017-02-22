@@ -238,3 +238,13 @@ def test_ensure_defaults_teardown():
 
     for key in default_options:
         assert get_gdal_config(key) is None
+
+
+def test_env_getitem_setitem_delitem():
+    """``rasterio.Env()`` treats config options like to ``os.environ``."""
+
+    with rasterio.Env() as env:
+        env['key'] = 'val'
+        assert env['key'] == 'val'
+        del env['key']
+        assert env['key'] is None
