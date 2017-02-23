@@ -16,13 +16,13 @@ def test_open_affine_and_transform(path_rgb_byte_tif):
     By settings the 'affine' kwarg to a wacky value we ensure that the
     'transform' kwarg is used while ignoring the 'affine' kwarg.
     """
-    warnings.resetwarnings()
-    with warnings.catch_warnings(record=True) as w:
+    with pytest.warns(DeprecationWarning) as w:
         with rasterio.open(
                 path_rgb_byte_tif,
                 affine=rasterio,
                 transform=affine.Affine.identity()) as src:
             pass
+
     assert len(w) == 2
     assert "'affine' kwarg in rasterio.open() is deprecated" \
            in str(w[0].message)
