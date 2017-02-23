@@ -265,3 +265,25 @@ def ensure_env(f):
             with Env.from_defaults():
                 return f(*args, **kwds)
     return wrapper
+
+
+def _current_env():
+
+    """Get the current ``rasterio.Env()``.
+
+    Raises
+    ------
+    EnvError
+        If an environment does not exist.
+
+    Returns
+    -------
+    Env
+    """
+
+    global _ENV
+
+    if _ENV is None:
+        raise EnvError("A 'rasterio.Env()' does not exist.")
+    else:
+        return _ENV
