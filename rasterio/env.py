@@ -1,4 +1,4 @@
-"""Rasterio's GDAL/AWS environment"""
+"""Rasterio's GDAL/AWS environment."""
 
 
 from functools import wraps
@@ -19,11 +19,76 @@ log = logging.getLogger(__name__)
 
 class Env(GDALEnv):
 
-    """Manage's the GDAL environment."""
+    """Abstraction for GDAL and AWS configuration.
+
+    The GDAL library is stateful: it has a registry of format drivers,
+    an error stack, and dozens of configuration options.
+    Rasterio's approach to working with GDAL is to wrap all the state
+    up using a Python context manager (see PEP 343,
+    https://www.python.org/dev/peps/pep-0343/). When the context is
+    entered GDAL drivers are registered, error handlers are
+    configured, and configuration options are set. When the context
+    is exited, drivers are removed from the registry and other
+    configurations are removed.
+
+    Example:
+
+        with rasterio.Env(GDAL_CACHEMAX=512) as env:
+            # All drivers are registered, GDAL's raster block cache
+            # size is set to 512MB.
+            # Commence processing...
+            ...
+            # End of processing.
+
+        # At this point, configuration options are set to their
+        # previous (possible unset) values.
+
+    A boto3 session or boto3 session constructor arguments
+    `aws_access_key_id`, `aws_secret_access_key`, `aws_session_token`
+    may be passed to Env's constructor. In the latter case, a session
+    will be created as soon as needed. AWS credentials are configured
+    for GDAL as needed.
+    """
 
     def __init__(self, aws_session=None, aws_access_key_id=None,
                  aws_secret_access_key=None, aws_session_token=None,
                  aws_region_name=None, aws_profile_name=None, **options):
+
+        """Create a new GDAL/AWS environment.
+
+        Note: this class is a context manager. GDAL isn't configured
+        until the context is entered via `with rasterio.Env()`.
+
+        Parameters
+        ----------
+        aws_session: object, optional
+            A boto3 session.
+        aws_access_key_id: string, optional
+            An access key id, as per boto3.
+        aws_secret_access_key: string, optional
+            A secret access key, as per boto3.
+        aws_session_token: string, optional
+            A session token, as per boto3.
+        region_name: string, optional
+            A region name, as per boto3.
+        profile_name: string, optional
+            A shared credentials profile name, as per boto3.
+        **options: optional
+            A mapping of GDAL configuration options, e.g.,
+            `CPL_DEBUG=True, CHECK_WITH_INVERT_PROJ=False`.
+
+        Raises
+        ------
+        EnvError
+            If the GDAL config options `AWS_ACCESS_KEY_ID` or
+            `AWS_SECRET_ACCESS_KEY` are given. AWS credentials are handled
+            exclusively by `boto3`.
+
+        Returns
+        -------
+        Env
+            A new instance of Env.
+        """
 
         super(Env, self).__init__()
 
@@ -50,8 +115,9 @@ class Env(GDALEnv):
             if self.aws_session else None)
 
     def auth_aws(self):
-        """Get credentials from ``boto3`` and add them to the GDAL
-        environment."""
+        """Use `boto3` to get AWS credentials and set the appropriate GDAL
+        environment options.
+        """
 
         import boto3
         if not self.aws_session:
@@ -75,6 +141,12 @@ class Env(GDALEnv):
 
     @staticmethod
     def default_options():
+        """Use these options when instantiating from ``self.from_defaults()``.
+
+        Returns
+        -------
+        dict
+        """
         return {
             'CHECK_WITH_INVERT_PROJ': True,
             'GTIFF_IMPLICIT_JPEG_OVR': False,
@@ -83,11 +155,27 @@ class Env(GDALEnv):
 
     @classmethod
     def from_defaults(cls, *args, **kwargs):
+        """Instantiate a new ``Env()`` with a set of default config
+        options.  Additional options can be given.
+
+        Parameters
+        ----------
+        args : *args
+            For ``Env()``.
+        kwargs : **kwargs
+            For ``Env()``.
+
+        Returns
+        -------
+        Env
+        """
+
         options = Env.default_options().copy()
         options.update(**kwargs)
         return cls(*args, **options)
 
     def __enter__(self):
+        """Start the GDAL environment and set environment options."""
         global _ENV
         if _ENV is not None:
             self._parent_config_options = _ENV.config_options.copy()
@@ -98,6 +186,9 @@ class Env(GDALEnv):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Teardown the GDAL environment, unset environment options, and
+        reset if this is a nested environment, reinstate the parent context.
+        """
         global _ENV
         self.close()
         if self._parent_config_options is not None:
@@ -107,19 +198,64 @@ class Env(GDALEnv):
             _ENV = None
 
     def close(self):
+        """Stop the GDAL environment."""
         self._stop()
 
     def __getitem__(self, key):
+        """Get a GDAL environment option.
+
+        Parameters
+        ----------
+        key : str
+            Option name.
+
+        Returns
+        -------
+        str or bool or None
+        """
         return self.get_config(key)
 
     def __setitem__(self, key, value):
+        """Set a GDAL environment option.
+
+        Parameters
+        ----------
+        key : str
+            Option name.
+        value : str or bool or None
+            Desired value.
+        """
         self.set_config(key=value)
 
     def __delitem__(self, key):
+        """Unset a GDAL environment option.
+
+        Parameters
+        ----------
+        key : str
+            Option name.
+        """
         self.del_config(key)
 
 
 def ensure_env(f):
+
+    """A decorator that ensures a ``rasterio.Env()`` exists before a function
+    executes.  If one already exists nothing is changed, if not then one is
+    created from ``rasterio.Env.from_defaults()`` and is torn down when the
+    function exits.
+
+    Parameter
+    ---------
+    f : function
+        Object to wrap.
+
+    Returns
+    -------
+    function
+        Wrapped function.
+    """
+
     @wraps(f)
     def wrapper(*args, **kwds):
         global _ENV
