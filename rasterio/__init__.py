@@ -53,7 +53,7 @@ def window_index(*args, **kwargs):
 
 
 __all__ = [
-    'band', 'open', 'copy', 'pad']
+    'band', 'open', 'copy', 'pad', 'Env']
 __version__ = "1.0a5"
 __gdal_version__ = gdal_version()
 
