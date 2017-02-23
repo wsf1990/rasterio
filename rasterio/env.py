@@ -8,7 +8,7 @@ from rasterio._env import GDALEnv
 from rasterio.errors import EnvError
 
 
-__all__ = ['GDALEnv']
+__all__ = ['Env', 'ensure_env']
 
 
 # The currently active GDAL/AWS environment is a private attribute.
