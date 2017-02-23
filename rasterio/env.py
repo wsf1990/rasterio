@@ -129,11 +129,3 @@ def ensure_env(f):
             with Env.from_defaults():
                 return f(*args, **kwds)
     return wrapper
-
-
-def _current_env():
-    global _ENV
-    if _ENV is None:
-        raise EnvError("An environment does not exist.")
-    else:
-        return _ENV
