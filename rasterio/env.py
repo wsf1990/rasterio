@@ -127,7 +127,8 @@ class Env(GDALEnv):
                 aws_session_token=self.aws_session_token,
                 region_name=self.aws_region_name,
                 profile_name=self.aws_profile_name)
-        self._aws_creds = self.aws_session._session.get_credentials()
+
+        self._aws_creds = self.aws_session.get_credentials()
 
         # Pass these credentials to the GDAL environment.
         if self._aws_creds.access_key:  # pragma: no branch
