@@ -59,3 +59,59 @@ def test_hit_ovr(red_green):
             image = numpy.moveaxis(data, 0, -1)
             assert image[0, 0, 0] == 17
             assert image[0, 0, 1] == 204
+
+
+def test_boundless_mask_not_all_valid():
+    """Confirm resolution of issue #1449"""
+    with rasterio.open("tests/data/red.tif") as src:
+        masked = src.read(1, boundless=True, masked=True, window=Window(-1, -1, 66, 66))
+    assert not masked.mask.all()
+    assert masked.mask[:, 0].all()
+    assert masked.mask[:, -1].all()
+    assert masked.mask[0, :].all()
+    assert masked.mask[-1, :].all()
+
+
+def test_boundless_fill_value():
+    """Confirm resolution of issue #1471"""
+    with rasterio.open("tests/data/red.tif") as src:
+        filled = src.read(1, boundless=True, fill_value=5, window=Window(-1, -1, 66, 66))
+    assert (filled[:, 0] == 5).all()
+    assert (filled[:, -1] == 5).all()
+    assert (filled[0, :] == 5).all()
+    assert (filled[-1, :] == 5).all()
+
+
+def test_boundless_masked_special():
+    """Confirm resolution of special case in issue #1471"""
+    with rasterio.open("tests/data/green.tif") as src:
+        masked = src.read(2, boundless=True, masked=True, window=Window(-1, -1, 66, 66))
+    assert not masked[:, 0].any()
+    assert not masked[:, -1].any()
+    assert not masked[0, :].any()
+    assert not masked[-1, :].any()
+
+
+def test_boundless_mask_special():
+    """Confirm resolution of special case in issue #1471"""
+    with rasterio.open("tests/data/green.tif") as src:
+        mask = src.read_masks(2, boundless=True, window=Window(-1, -1, 66, 66))
+    assert not mask[:, 0].any()
+    assert not mask[:, -1].any()
+    assert not mask[0, :].any()
+    assert not mask[-1, :].any()
+
+
+def test_boundless_fill_value_overview_masks():
+    """Confirm a more general resolution to issue #1471"""
+    with rasterio.open("tests/data/cogeo.tif") as src:
+        data = src.read(1, boundless=True, window=Window(-300, -335, 1000, 1000), fill_value=5, out_shape=(512, 512))
+    assert (data[:, 0] == 5).all()
+
+
+def test_boundless_masked_fill_value_overview_masks():
+    """Confirm a more general resolution to issue #1471"""
+    with rasterio.open("tests/data/cogeo.tif") as src:
+        data = src.read(1, masked=True, boundless=True, window=Window(-300, -335, 1000, 1000), fill_value=5, out_shape=(512, 512))
+    assert data.fill_value == 5
+    assert data.mask[:, 0].all()

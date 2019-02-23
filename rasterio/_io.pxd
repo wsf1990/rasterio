@@ -12,6 +12,7 @@ cdef class DatasetReaderBase(DatasetBase):
 cdef class DatasetWriterBase(DatasetReaderBase):
     cdef readonly object _init_dtype
     cdef readonly object _init_nodata
+    cdef readonly object _init_gcps
     cdef readonly object _options
 
 
@@ -29,7 +30,7 @@ cdef class WarpedVRTReaderBase(DatasetReaderBase):
 cdef class InMemoryRaster:
     cdef GDALDatasetH _hds
     cdef double gdal_transform[6]
-    cdef int band_ids[1]
+    cdef int* band_ids
     cdef np.ndarray _image
     cdef object crs
     cdef object transform  # this is an Affine object.
@@ -49,4 +50,4 @@ ctypedef np.float64_t DTYPE_FLOAT64_t
 
 cdef bint in_dtype_range(value, dtype)
 
-cdef int io_auto(image, GDALRasterBandH band, bint write, int resampling=*)
+cdef int io_auto(image, GDALRasterBandH band, bint write, int resampling=*) except -1

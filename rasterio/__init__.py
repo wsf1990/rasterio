@@ -5,7 +5,6 @@ from __future__ import absolute_import
 from collections import namedtuple
 from contextlib import contextmanager
 import logging
-import warnings
 
 try:
     from pathlib import Path
@@ -25,7 +24,7 @@ from rasterio.drivers import is_blacklisted
 from rasterio.dtypes import (
     bool_, ubyte, uint8, uint16, int16, uint32, int32, float32, float64,
     complex_, check_dtype)
-from rasterio.env import ensure_env_credentialled, Env
+from rasterio.env import ensure_env_with_credentials, Env
 from rasterio.errors import RasterioIOError
 from rasterio.compat import string_types
 from rasterio.io import (
@@ -43,7 +42,7 @@ import rasterio.path
 
 
 __all__ = ['band', 'open', 'pad', 'Env']
-__version__ = "1.0rc4"
+__version__ = "1.0.18"
 __gdal_version__ = gdal_version()
 
 # Rasterio attaches NullHandler to the 'rasterio' logger and its
@@ -55,7 +54,7 @@ log = logging.getLogger(__name__)
 log.addHandler(NullHandler())
 
 
-@ensure_env_credentialled
+@ensure_env_with_credentials
 def open(fp, mode='r', driver=None, width=None, height=None, count=None,
          crs=None, transform=None, dtype=None, nodata=None, sharing=True,
          **kwargs):
@@ -119,7 +118,7 @@ def open(fp, mode='r', driver=None, width=None, height=None, count=None,
 
     Returns
     -------
-    A ``DatasetReader`` or ``DatasetUpdater`` object.
+    A ``DatasetReader`` or ``DatasetWriter`` object.
 
     Examples
     --------

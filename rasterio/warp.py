@@ -154,13 +154,13 @@ def transform_bounds(
         for x in (left, right):
             in_xs.extend([x] * (densify_pts + 2))
             in_ys.extend(
-                bottom + np.arange(0, densify_pts + 2, dtype=np.float32) *
+                bottom + np.arange(0, densify_pts + 2, dtype=np.float64) *
                 ((top - bottom) * densify_factor)
             )
 
         for y in (bottom, top):
             in_xs.extend(
-                left + np.arange(1, densify_pts + 1, dtype=np.float32) *
+                left + np.arange(1, densify_pts + 1, dtype=np.float64) *
                 ((right - left) * densify_factor)
             )
             in_ys.extend([y] * densify_pts)
@@ -212,8 +212,8 @@ def reproject(source, destination, src_transform=None, gcps=None,
         Will be derived from source if it is a rasterio Band.
         Example: CRS({'init': 'EPSG:4326'})
     src_nodata: int or float, optional
-        The source nodata value.Pixels with this value will not be
-        used for interpolation. If not set, it will be default to the
+        The source nodata value. Pixels with this value will not be
+        used for interpolation. If not set, it will default to the
         nodata value of the source image if a masked ndarray or
         rasterio band, if available.
     dst_transform: affine.Affine(), optional
@@ -291,7 +291,7 @@ def reproject(source, destination, src_transform=None, gcps=None,
     _reproject(
         source, destination, src_transform=src_transform, gcps=gcps,
         src_crs=src_crs, src_nodata=src_nodata, dst_transform=dst_transform,
-        dst_crs=dst_crs, dst_nodata=dst_nodata, dst_alpa=dst_alpha,
+        dst_crs=dst_crs, dst_nodata=dst_nodata, dst_alpha=dst_alpha,
         src_alpha=src_alpha, resampling=resampling,
         init_dest_nodata=init_dest_nodata, num_threads=num_threads,
         warp_mem_limit=warp_mem_limit, **kwargs)
@@ -342,7 +342,7 @@ def aligned_target(transform, width, height, resolution):
 @ensure_env
 def calculate_default_transform(
         src_crs, dst_crs, width, height, left=None, bottom=None, right=None,
-        top=None, gcps=None, resolution=None):
+        top=None, gcps=None, resolution=None, dst_width=None, dst_height=None):
     """Output dimensions and transform for a reprojection.
 
     Source and destination coordinate reference systems and output
@@ -374,6 +374,9 @@ def calculate_default_transform(
     resolution: tuple (x resolution, y resolution) or float, optional
         Target resolution, in units of target coordinate reference
         system.
+    dst_width, dst_height: int, optional
+        Output file size in pixels and lines. Cannot be used together
+        with resolution.
 
     Returns
     -------
@@ -398,6 +401,18 @@ def calculate_default_transform(
     if any(x is None for x in (left, bottom, right, top)) and not gcps:
         raise ValueError("Either four bounding values or ground control points"
                          "must be specified")
+    
+    if (dst_width is None) != (dst_height is None):
+        raise ValueError("Either dst_width and dst_height must be specified "
+                         "or none of them.")
+
+    if all(x is not None for x in (dst_width, dst_height)):
+        dimensions = (dst_width, dst_height)
+    else:
+        dimensions = None
+
+    if resolution and dimensions:
+        raise ValueError("Resolution cannot be used with dst_width and dst_height.")
 
     dst_affine, dst_width, dst_height = _calculate_default_transform(
         src_crs, dst_crs, width, height, left, bottom, right, top, gcps)
@@ -426,5 +441,15 @@ def calculate_default_transform(
 
         dst_width = ceil(dst_width * xratio)
         dst_height = ceil(dst_height * yratio)
+    
+    if dimensions:
+        xratio = dst_width / dimensions[0]
+        yratio = dst_height / dimensions[1]
+
+        dst_width = dimensions[0]
+        dst_height = dimensions[1]
+        
+        dst_affine = Affine(dst_affine.a * xratio, dst_affine.b, dst_affine.c,
+                            dst_affine.d, dst_affine.e * yratio, dst_affine.f)
 
     return dst_affine, dst_width, dst_height

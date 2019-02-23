@@ -1,6 +1,256 @@
 Changes
 =======
 
+1.0.18 (2019-02-07)
+-------------------
+
+- Fix a regression reported in #1623.
+
+1.0.17 (2019-02-05)
+-------------------
+
+- Fix a regression in evaluation of CRS equality (#1620).
+
+1.0.16 (2019-02-04)
+-------------------
+
+- A bug preventing GCPs from being created with new BufferedDatasetWriter
+  instances (#1600) has been fixed (#1610).
+- A previously unreported bug preventing BufferedDatasetWriters from being
+  opened in r+ mode has been fixed.
+- A regression in creating CRS objects from PROJ4 strings that include
+  "+wktext" (#1609) has been fixed.
+- Regressions in str representations of empty CRS objects and the handling of
+  unreferenced datasets in rasterio._base have been fixed (#1616).
+- GDAL seems to work best if GDAL_DATA is set as early as possible. Ideally it
+  is set when building the library or in the environment before importing
+  Rasterio, but for wheels we patch GDAL_DATA into os.environ when rasterio.env
+  is imported. This resolves #1611.
+
+1.0.15 (2019-01-27)
+-------------------
+
+- Google cloud storage support was *not* in fact added in 1.0.14, but is
+  present in 1.0.15.
+
+1.0.14 (2019-01-22)
+-------------------
+
+- The _CRS class has been refactored so that a WKT representation, rather than
+  PROJ4 representation, is the canonical form. This resolves issues #1397 and
+  #1587 specifically, and an entire category of issues discussed in
+  https://rasterio.groups.io/g/dev/message/68.
+- Native support for Google Cloud Storage using "gs://" URLs has been added
+  (#1577).
+- On entering a dataset context (DatasetBase.__enter__) a new anonymous GDAL
+  environment is created if needed and is entered. This makes `with
+  rasterio.open(...) as dataset:` roughly equivalent to `with
+  rasterio.open(...) as dataset, Env():`. This helps prevent bugs when datasets
+  are created and then used later or are used in different scopes.
+
+1.0.13 (2018-12-14)
+-------------------
+
+- Fix a buffer dttype mismatch on Windows introduced in 1.0.12 (#1579).
+
+1.0.12 (2018-12-10)
+-------------------
+
+- Rasterio's lower level I/O functions now take Py_ssize_t index arrays and
+  will raise exceptions for type mismatches instead of swallowing the
+  exceptions (#1076).
+- The _boundless_vrt_doc function's background layer no longer needs an
+  in-memory dataset and the performance regression noted in #1499 has been
+  reversed. We've also found a performance improvement in masked boundless
+  reads in the case that the source data is entirely valid.
+- The signature of the private _boundless_vrt_doc function in rasterio.vrt has
+  changed. Its background keyword argument now takes an int or float, a new
+  masked keyword argument has been added, and the function returns a unicode
+  str instead of ascii-encoded bytes.
+- The copy and copyfiles functions of rasterio.shutil now raise an exception
+  when the source and destination paths identify the same dataset (#1569).
+
+1.0.11 (2019-11-30)
+-------------------
+
+- Prevent needless warning when making boundless reads with a fill value
+  (#1499).
+- The GDAL band cache is flushed at the top of build_overviews to fix #1497.
+- Options --gdal-data and --proj-data have been added to the rio-env command so
+  that users of Rasterio wheels can get paths to set GDAL_DATA and PROJ_LIB
+  environment variables.
+- The attempt to make GDAL and PROJ support file discovery and configuration
+  automatic within methods of the CRS class has been reverted. Users must
+  execute such code inside a `with Env()` block or set the GDAL_DATA and
+  PROJ_LIB environment variables needed by GDAL.
+
+1.0.10 (2019-11-16)
+-------------------
+
+- Avoid segmentation fault when OSRGetAuthority* functions return null
+  pointers, making Rasterio more robust when reading CRS that don't map
+  perfectly to PROJ.
+- Ensure that GDAL and PROJ support files can be found in Rasterio wheels when
+  we call CRS methods (#1539).
+- Accomodate the Esri flavor of projection WKT (#1537).
+- Add missing raster offsets and scales properties (#1527).
+
+1.0.9 (2019-10-25)
+------------------
+
+Bug fixes:
+
+- Delegate test of the environment for existing session credentials to the
+  session class to generalize credentialization of GDAL to cloud providers
+  other than AWS (#1520). The env.hascreds function is no longer used in
+  Rasterio and has been marked as deprecated.
+- Switch to use of botocore Credentials.get_frozen_credentials (#1521).
+- Numpy masked arrays with the normal Numpy mask sense (True == invalid) are
+  now supported as input for feature.shapes(). The mask keyword argument of the
+  function keeps to the GDAL sense of masks (nonzero == invalid) and the
+  documentation has been improved to communicate this (#1517).
+- The defaults for WarpedVRT's `src_nodata` and `nodata` keyword arguments are
+  no longer None, but are markers for the default behavior: inheritance of
+  nodata values from the VRT's source dataset. Values of `None` for these
+  keyword arguments means that the VRT does not inherit from the source and has
+  no nodata value at all (#1503).
+- WEBP has been added to the Compression enum. Exploitation of this new
+  compression mode will require GDAL 2.4.
+- Rasterio now check for two AWS environment variables before creating a
+  session (#1494).
+- The ensure_env_with_credentials decorator which wraps rasterio.open will no
+  longer clobber the credentials in a surrounding environment or seek
+  credentials when they already exist (#1507).
+- The comparison of CRS objects to dicts and strs that we pledged to remove at
+  1.0 has at last been removed (#1492).
+
+1.0.8 (2018-10-02)
+------------------
+
+Bug fixes:
+
+- Datasets contained in MemoryFile buffers are now opened in r+ or w+ mode
+  instead of r or w.
+- The namedtuple _asdict method is overridden in BoundingBox to work around a
+  bug in Python 3.4.3 (#1486, #1488). This unblocks creation of manylinux1
+  wheels for Python 3.4.
+
+1.0.7 (2018-09-26)
+------------------
+
+Bug fixes:
+
+- Use the non-resolving path form of files_inout_arg in rio-convert and
+  rio-shapes (#999).
+- Filling the empty regions of boundless reads was too slow in some cases and
+  a faster solution has been found (#1480).
+- Require cligj>=0.5 for compatibility with click 7.0.
+- Precisely specify CLI option and argument names for click 6.x and 7.0
+  compatibility.
+
+1.0.6 (2018-09-24)
+------------------
+
+Bug fixes:
+
+- If the build_overviews method of a dataset is passed a list of factors that
+  specify more than one 1x1 pixel overview (#1333), Rasterio raises an
+  exception.
+- Calling calculate_default_transform for large extents should no longer result
+  in the out of memory error reported in #1131. The rio-warp command should
+  also now run more quickly and with a smaller memory footprint.
+- We have a more general fix for the problem of filling the empty regions of
+  boundless reads (#1471).
+
+1.0.5 (2018-09-19)
+------------------
+
+Bug fixes:
+
+- The fill value for boundless reads was ignored in Rasterio versions 1-1.0.4
+  but now applies (#1471).
+- An invalid shortcut has been eliminated and Rasterio now produces a proper
+  mask in the boundless masked read case (#1449).
+- Loss of a row or column in geometry_window() and mask() has been fixed
+  (#1472).
+
+1.0.4 (2018-09-17)
+------------------
+
+Bug fixes:
+
+- Boundless reads of datasets without a coordinate reference system have been
+  fixed (#1448).
+- A y-directional error in disjoint_bounds (#1459) has been fixed.
+- Prevent geometries from being thrown near projection singularities (#1446).
+- Missing --aws-no-sign-requests and --aws-requester-pays options added to
+  the main rio command (#1460).
+- Add missing bilinear, cubic spline, lanczos resampling modes for overviews
+  (#1457).
+- Raise ValueError if get_writer_for_driver() is called without a driver
+  name.
+- Windows are now frozen so that they are hashable (#1452).
+
+Refactoring:
+
+- Use of InMemoryRaster eliminates redundant code in the _warp module (#1427,
+  #816).
+- Generalize sessions to support cloud providers other than AWS (#1429).
+
+1.0.3.post1 (2018-09-07)
+------------------------
+
+This version corrects errors made in building binary wheels for 1.0.3. There
+are no bug fixes or new features in this version.
+
+1.0.3 (2018-08-01)
+
+Bug fixes:
+
+- A regression in GeoJSON source handling in rio-rasterize (#1425) has been
+  fixed.
+- Rasterization of linear rings (#1431) is now supported.
+- The input file handler of rio-rasterize has been changed so that it does not
+  reject GeoJSON files (#1425).
+- Linear rings have been added as acceptable input for rio-rasterize and other
+  commands and functions (#1431).
+
+1.0.2 (2018-07-27)
+------------------
+
+Bug fixes:
+
+- The output of calculate_default_transform() can be fixed to output dimensions
+  as well as to output resolution (#1409).
+- In using rio-warp, the --src-bounds option can now override the bounds of the
+  source dataset when --dimensions is used (#1419).
+- Bounds of rotated rasters are now calculated correctly (#1422).
+- A band indexing bug in reproject() (#1350) has been fixed (#1424).
+
+1.0.1 (2018-07-23)
+------------------
+
+Bug fixes:
+
+- Bounding envelopes are densified at higher precision in transform_bounds to
+  fix #1411.
+- Add LERC compression to enums.Compression (#1412).
+- The reproject() function now passes dst_alpha properly to _reproject(), which
+  unlocks materialization of warp destination alpha band masks (#1417).
+- The --dimensions and --src-bounds options of rio-warp can be used together
+  as expected (#1418).
+
+1.0.0 (2018-07-12)
+------------------
+
+There have been no changes since release candidate 5.
+
+1.0rc5 (2018-07-09)
+-------------------
+
+- C source files are now generated using Cython 0.28.3, which gives us support
+  for Python 3.7 (#1404, #1405).
+
 1.0rc4 (2018-07-05)
 -------------------
 

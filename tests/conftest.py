@@ -48,18 +48,16 @@ def runner():
 
 
 @pytest.fixture(scope='function')
-def data():
+def data(tmpdir):
     """A temporary directory containing a copy of the files in data."""
-    tmpdir = py.test.ensuretemp('tests/data')
     for filename in test_files:
         shutil.copy(filename, str(tmpdir))
     return tmpdir
 
 
 @pytest.fixture(scope='function')
-def red_green():
+def red_green(tmpdir):
     """A temporary directory containing copies of red.tif, green.tif."""
-    tmpdir = py.test.ensuretemp('tests/data')
     for filename in ['tests/data/red.tif', 'tests/data/red.tif.ovr', 'tests/data/green.tif', 'tests/data/green.tif.ovr']:
         shutil.copy(filename, str(tmpdir))
     return tmpdir
@@ -465,6 +463,7 @@ def gdalenv(request):
         if rasterio.env.local._env:
             rasterio.env.delenv()
             rasterio.env.local._env = None
+
     request.addfinalizer(fin)
 
 
@@ -476,16 +475,19 @@ def data_dir():
 
 @pytest.fixture(scope='session')
 def path_rgb_byte_tif(data_dir):
+    """The original RGB test fixture with no sidecar files"""
     return os.path.join(data_dir, 'RGB.byte.tif')
 
 
 @pytest.fixture(scope='session')
 def path_rgba_byte_tif(data_dir):
+    """Derived from RGB.byte.tif, this has an alpha band"""
     return os.path.join(data_dir, 'RGBA.byte.tif')
 
 
 @pytest.fixture(scope='session')
 def path_rgb_msk_byte_tif(data_dir):
+    """Derived from RGB.byte.tif, this has an external mask"""
     return os.path.join(data_dir, 'RGB2.byte.tif')
 
 
@@ -560,15 +562,15 @@ def path_alpha_tif(data_dir):
 
 
 @pytest.fixture(scope='session')
-def path_zip_file():
+def path_zip_file(data_dir):
     """Creates ``coutwildrnp.zip`` if it does not exist and returns
     the absolute file path."""
-    path = '{}/white-gemini-iv.zip'.format(data_dir())
+    path = '{}/white-gemini-iv.zip'.format(data_dir)
     if not os.path.exists(path):
         with zipfile.ZipFile(path, 'w') as zip:
             for filename in ['white-gemini-iv.vrt',
                              '389225main_sw_1965_1024.jpg']:
-                zip.write(os.path.join(data_dir(), filename), filename)
+                zip.write(os.path.join(data_dir, filename), filename)
     return path
 
 

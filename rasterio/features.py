@@ -78,8 +78,12 @@ def shapes(source, mask=None, connectivity=4, transform=IDENTITY):
         Data type must be one of rasterio.int16, rasterio.int32,
         rasterio.uint8, rasterio.uint16, or rasterio.float32.
     mask : numpy ndarray or rasterio Band object, optional
-        Values of False or 0 will be excluded from feature generation
-        Must evaluate to bool (rasterio.bool_ or rasterio.uint8)
+        Must evaluate to bool (rasterio.bool_ or rasterio.uint8). Values
+        of False or 0 will be excluded from feature generation.  Note
+        well that this is the inverse sense from Numpy's, where a mask
+        value of True indicates invalid data in an array. If `source` is
+        a Numpy masked array and `mask` is None, the source's mask will
+        be inverted and used in place of `mask`.
     connectivity : int, optional
         Use 4 or 8 pixel connectivity for grouping pixels into features
     transform : Affine transformation, optional
@@ -104,6 +108,10 @@ def shapes(source, mask=None, connectivity=4, transform=IDENTITY):
     memory.
 
     """
+    if hasattr(source, 'mask') and mask is None:
+        mask = ~source.mask
+        source = source.data
+
     transform = guard_transform(transform)
     for s, v in _shapes(source, mask, connectivity, transform):
         yield s, v
@@ -410,8 +418,10 @@ def geometry_window(dataset, shapes, pad_x=0, pad_y=0, north_up=True,
         right, bottom = (right, bottom) * dataset.transform
 
     window = dataset.window(left, bottom, right, top)
-    window = window.round_offsets(op='floor', pixel_precision=pixel_precision)
-    window = window.round_shape(op='ceil', pixel_precision=pixel_precision)
+    window_floored = window.round_offsets(op='floor', pixel_precision=pixel_precision)
+    w = math.ceil(window.width + window.col_off - window_floored.col_off)
+    h = math.ceil(window.height + window.row_off - window_floored.row_off)
+    window = Window(window_floored.col_off, window_floored.row_off, w, h)
 
     # Make sure that window overlaps raster
     raster_window = Window(0, 0, dataset.width, dataset.height)
@@ -440,8 +450,8 @@ def is_valid_geom(geom):
     bool: True if object is a valid GeoJSON geometry type
     """
 
-    geom_types = {'Point', 'MultiPoint', 'LineString', 'MultiLineString',
-                  'Polygon', 'MultiPolygon'}
+    geom_types = {'Point', 'MultiPoint', 'LineString', 'LinearRing',
+                  'MultiLineString', 'Polygon', 'MultiPolygon'}
 
     if 'type' not in geom:
         return False
@@ -472,6 +482,11 @@ def is_valid_geom(geom):
             # Lines must have at least 2 coordinates and at least x, y for
             # a coordinate
             return len(coords) >= 2 and len(coords[0]) >= 2
+
+        if geom_type == 'LinearRing':
+            # Rings must have at least 4 coordinates and at least x, y for
+            # a coordinate
+            return len(coords) >= 4 and len(coords[0]) >= 2
 
         if geom_type == 'MultiLineString':
             # Multi lines must have at least one LineString

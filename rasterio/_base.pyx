@@ -18,13 +18,12 @@ from rasterio._shim cimport open_dataset
 
 from rasterio.compat import string_types
 from rasterio.control import GroundControlPoint
-from rasterio.crs import CRS
 from rasterio import dtypes
 from rasterio.coords import BoundingBox
 from rasterio.crs import CRS
 from rasterio.enums import (
     ColorInterp, Compression, Interleaving, MaskFlags, PhotometricInterp)
-from rasterio.env import Env
+from rasterio.env import Env, env_ctx_if_needed
 from rasterio.errors import (
     RasterioIOError, CRSError, DriverRegistrationError, NotGeoreferencedWarning,
     RasterBlockError, BandOverviewError)
@@ -197,7 +196,7 @@ cdef class DatasetBase(object):
 
             try:
                 self._hds = open_dataset(filename, flags, driver, kwargs, None)
-            except CPLE_OpenFailedError as err:
+            except CPLE_BaseError as err:
                 raise RasterioIOError(str(err))
 
         self.name = path.name
@@ -208,6 +207,8 @@ cdef class DatasetBase(object):
         self._nodatavals = []
         self._units = ()
         self._descriptions = ()
+        self._scales = ()
+        self._offsets = ()
         self._gcps = None
         self._read = False
 
@@ -261,69 +262,19 @@ cdef class DatasetBase(object):
 
     def _handle_crswkt(self, wkt):
         """Return the GDAL dataset's stored CRS"""
-        cdef char *proj = NULL
-        cdef OGRSpatialReferenceH osr = NULL
-        wkt_b = wkt.encode('utf-8')
-        cdef const char *wkt_c = wkt_b
-
-        # Test that the WKT definition isn't just an empty string, which
-        # can happen when the source dataset is not georeferenced.
-        if len(wkt) > 0:
-            crs = CRS()
-
-            osr = OSRNewSpatialReference(wkt_c)
-            if osr == NULL:
-                raise ValueError("Unexpected NULL spatial reference")
-            log.debug("Got coordinate system")
-
-            # Try to find an EPSG code in the spatial referencing.
-            if OSRAutoIdentifyEPSG(osr) == 0:
-                key = OSRGetAuthorityName(osr, NULL)
-                val = OSRGetAuthorityCode(osr, NULL)
-                log.debug("Authority key: %s, value: %s", key, val)
-                crs['init'] = u'epsg:' + val
-            else:
-                log.debug("Failed to auto identify EPSG")
-                OSRExportToProj4(osr, &proj)
-                if proj == NULL:
-                    raise ValueError("Unexpected Null spatial reference")
-
-                value = proj
-                value = value.strip()
-
-                for param in value.split():
-                    kv = param.split("=")
-                    if len(kv) == 2:
-                        k, v = kv
-                        try:
-                            v = float(v)
-                            if v % 1 == 0:
-                                v = int(v)
-                        except ValueError:
-                            # Leave v as a string
-                            pass
-                    elif len(kv) == 1:
-                        k, v = kv[0], True
-                    else:
-                        raise ValueError(
-                            "Unexpected proj parameter %s" % param)
-                    k = k.lstrip("+")
-                    crs[k] = v
-
-            CPLFree(proj)
-            _safe_osr_release(osr)
-            return crs
-
+        # No dialect morphing, if the dataset was created using software
+        # "speaking" the Esri dialect, we will read Esri WKT.
+        if wkt:
+            return CRS.from_wkt(wkt)
         else:
-            log.debug("No projection detected.")
+            return None
 
     def read_crs(self):
         """Return the GDAL dataset's stored CRS"""
-        cdef const char *wkt_b = GDALGetProjectionRef(self._hds)
-        if wkt_b == NULL:
-            raise ValueError("Unexpected NULL spatial reference")
-
+        cdef const char *wkt_b = GDALGetProjectionRef(self.handle())
         wkt = wkt_b
+        if wkt == NULL:
+            raise ValueError("Unexpected NULL spatial reference")
         return self._handle_crswkt(wkt)
 
     def read_transform(self):
@@ -345,20 +296,19 @@ cdef class DatasetBase(object):
         if self._hds != NULL:
             GDALClose(self._hds)
         self._hds = NULL
-        log.debug("Dataset %r has been stopped.", self)
 
     def close(self):
         self.stop()
         self._closed = True
-        log.debug("Dataset %r has been closed.", self)
 
     def __enter__(self):
-        log.debug("Entering Dataset %r context.", self)
+        self._env = env_ctx_if_needed()
+        self._env.__enter__()
         return self
 
     def __exit__(self, type, value, traceback):
+        self._env.__exit__()
         self.close()
-        log.debug("Exited Dataset %r context.", self)
 
     def __dealloc__(self):
         if self._hds != NULL:
@@ -571,6 +521,12 @@ cdef class DatasetBase(object):
     def _set_all_descriptions(self, value):
         raise NotImplementedError
 
+    def _set_all_scales(self, value):
+        raise NotImplementedError
+
+    def _set_all_offsets(self, value):
+        raise NotImplementedError
+
     def _set_all_units(self, value):
         raise NotImplementedError
 
@@ -611,6 +567,44 @@ cdef class DatasetBase(object):
 
         def __set__(self, value):
             self.write_transform(value.to_gdal())
+
+    property offsets:
+        """Raster offset for each dataset band
+
+        To set offsets, one for each band is required.
+
+        Returns
+        -------
+        list of float
+        """
+        def __get__(self):
+            cdef int success = 0
+            if not self._offsets:
+                offsets = [GDALGetRasterOffset(self.band(j), &success) for j in self.indexes]
+                self._offsets = tuple(offsets)
+            return self._offsets
+
+        def __set__(self, value):
+            self._set_all_offsets(value)
+
+    property scales:
+        """Raster scale for each dataset band
+
+        To set scales, one for each band is required.
+
+        Returns
+        -------
+        list of float
+        """
+        def __get__(self):
+            cdef int success = 0
+            if not self._scales:
+                scales = [GDALGetRasterScale(self.band(j), &success) for j in self.indexes]
+                self._scales = tuple(scales)
+            return self._scales
+
+        def __set__(self, value):
+            self._set_all_scales(value)
 
     property units:
         """A list of str: one units string for each dataset band
@@ -788,7 +782,18 @@ cdef class DatasetBase(object):
         """
         def __get__(self):
             a, b, c, d, e, f, _, _, _ = self.transform
-            return BoundingBox(c, f + e * self.height, c + a * self.width, f)
+            width = self.width
+            height = self.height
+            if b == d == 0:
+                return BoundingBox(c, f + e * height, c + a * width, f)
+            else:
+                c0x, c0y = c, f
+                c1x, c1y = self.transform * (0, height)
+                c2x, c2y = self.transform * (width, height)
+                c3x, c3y = self.transform * (width, 0)
+                xs = (c0x, c1x, c2x, c3x)
+                ys = (c0y, c1y, c2y, c3y)
+                return BoundingBox(min(xs), min(ys), max(xs), max(ys))
 
     property res:
         """Returns the (width, height) of pixels in the units of its
@@ -982,7 +987,7 @@ cdef class DatasetBase(object):
         else:
             band = self._hds
 
-        if ovr:
+        if ovr is not None:
             obj = GDALGetOverview(band, ovr)
             if obj == NULL:
               raise BandOverviewError(
@@ -1080,7 +1085,7 @@ cdef class DatasetBase(object):
             if color == NULL:
                 log.warn("NULL color at %d, skipping", i)
                 continue
-            log.info(
+            log.debug(
                 "Color: (%d, %d, %d, %d)",
                 color.c1, color.c2, color.c3, color.c4)
             retval[i] = (color.c1, color.c2, color.c3, color.c4)
@@ -1229,10 +1234,19 @@ def _transform(src_crs, dst_crs, xs, ys, zs):
     try:
         transform = OCTNewCoordinateTransformation(src, dst)
         transform = exc_wrap_pointer(transform)
+        exc_wrap_int(OCTTransform(transform, n, x, y, z))
 
-        err = OCTTransform(transform, n, x, y, z)
-        err = exc_wrap_int(err)
+    except CPLE_BaseError as exc:
+        log.debug("{}".format(exc))
 
+    except:
+        CPLFree(x)
+        CPLFree(y)
+        CPLFree(z)
+        _safe_osr_release(src)
+        _safe_osr_release(dst)
+
+    try:
         res_xs = [0]*n
         res_ys = [0]*n
         for i in range(n):
@@ -1242,12 +1256,9 @@ def _transform(src_crs, dst_crs, xs, ys, zs):
             res_zs = [0]*n
             for i in range(n):
                 res_zs[i] = z[i]
-            retval = (res_xs, res_ys, res_zs)
+            return (res_xs, res_ys, res_zs)
         else:
-            retval = (res_xs, res_ys)
-
-    except CPLE_NotSupportedError as exc:
-        raise CRSError(str(exc))
+            return (res_xs, res_ys)
 
     finally:
         CPLFree(x)
@@ -1256,50 +1267,31 @@ def _transform(src_crs, dst_crs, xs, ys, zs):
         _safe_osr_release(src)
         _safe_osr_release(dst)
 
-    return retval
-
 
 cdef OGRSpatialReferenceH _osr_from_crs(object crs) except NULL:
     """Returns a reference to memory that must be deallocated
     by the caller."""
-    if not crs:
-        raise CRSError("A defined coordinate reference system is required")
+    crs = CRS.from_user_input(crs)
+
+    # EPSG is a special case.
+    init = crs.get('init')
+    if init:
+        auth, val = init.strip().split(':')
+
+        if not val or auth.upper() != 'EPSG':
+            raise CRSError("Invalid CRS: {!r}".format(crs))
+        proj = 'EPSG:{}'.format(val).encode('utf-8')
+    else:
+        proj = crs.to_string().encode('utf-8')
+        log.debug("PROJ.4 to be imported: %r", proj)
 
     cdef OGRSpatialReferenceH osr = OSRNewSpatialReference(NULL)
-
-    if isinstance(crs, string_types):
-        proj = crs.encode('utf-8')
-
-    # Make a CRS object from provided dict.
-    else:
-        crs = CRS(crs)
-        # EPSG is a special case.
-        init = crs.get('init')
-        if init:
-            auth, val = init.split(':')
-
-            if not val:
-                _safe_osr_release(osr)
-                raise CRSError("Invalid CRS: {!r}".format(crs))
-
-            if auth.upper() == 'EPSG':
-                proj = 'EPSG:{}'.format(val).encode('utf-8')
-        else:
-            params = []
-            for k, v in crs.items():
-                if v is True or (k in ('no_defs', 'wktext') and v):
-                    params.append("+%s" % k)
-                else:
-                    params.append("+%s=%s" % (k, v))
-            proj = " ".join(params)
-            log.debug("PROJ.4 to be imported: %r", proj)
-            proj = proj.encode('utf-8')
-
     try:
         retval = exc_wrap_int(OSRSetFromUserInput(osr, <const char *>proj))
         if retval:
             _safe_osr_release(osr)
             raise CRSError("Invalid CRS: {!r}".format(crs))
+        exc_wrap_int(OSRMorphFromESRI(osr))
     except CPLE_BaseError as exc:
         _safe_osr_release(osr)
         raise CRSError(str(exc))

@@ -36,7 +36,7 @@ def test_dst_crs_error_2(runner, tmpdir):
     result = runner.invoke(main_group, [
         'warp', srcname, outputname, '--dst-crs', '{"proj": "foobar"}'])
     assert result.exit_code == 2
-    assert 'for dst_crs: Invalid' in result.output
+    assert 'Invalid value for dst_crs' in result.output
 
 
 def test_dst_crs_error_epsg(runner, tmpdir):
@@ -46,7 +46,7 @@ def test_dst_crs_error_epsg(runner, tmpdir):
     result = runner.invoke(main_group, [
         'warp', srcname, outputname, '--dst-crs', 'EPSG:'])
     assert result.exit_code == 2
-    assert 'for dst_crs: invalid literal for int()' in result.output
+    assert "for dst_crs: Invalid CRS:" in result.output
 
 
 def test_dst_crs_error_epsg_2(runner, tmpdir):
@@ -212,6 +212,28 @@ def test_warp_no_reproject_bounds_res(runner, tmpdir):
             assert np.allclose(output.bounds, out_bounds)
 
 
+def test_warp_no_reproject_src_bounds_dimensions(runner, tmpdir):
+    """--src-bounds option works with dimensions"""
+    srcname = 'tests/data/shade.tif'
+    outputname = str(tmpdir.join('test.tif'))
+    out_bounds = [-11850000, 4810000, -11849000, 4812000]
+    result = runner.invoke(
+        main_group, [
+            'warp', srcname, outputname, '--dimensions', 9, 14,
+            '--src-bounds'] + out_bounds)
+    assert result.exit_code == 0
+    assert os.path.exists(outputname)
+
+    with rasterio.open(srcname) as src:
+        with rasterio.open(outputname) as output:
+            assert output.crs == src.crs
+            assert np.allclose(output.bounds, out_bounds)
+            assert np.allclose([111.111111, 142.857142],
+                               [output.transform.a, -output.transform.e])
+            assert output.width == 9
+            assert output.height == 14
+
+
 def test_warp_reproject_dst_crs(runner, tmpdir):
     srcname = 'tests/data/RGB.byte.tif'
     outputname = str(tmpdir.join('test.tif'))
@@ -348,6 +370,26 @@ def test_warp_reproject_src_bounds_res(runner, tmpdir):
         assert output.height == 14
 
 
+def test_warp_reproject_src_bounds_dimensions(runner, tmpdir):
+    """--src-bounds option works with dimensions"""
+    srcname = 'tests/data/shade.tif'
+    outputname = str(tmpdir.join('test.tif'))
+    out_bounds = [-11850000, 4810000, -11849000, 4812000]
+    result = runner.invoke(
+        main_group, [
+            'warp', srcname, outputname, '--dst-crs', 'EPSG:4326',
+            '--dimensions', 9, 14, '--src-bounds'] + out_bounds)
+    assert result.exit_code == 0
+    assert os.path.exists(outputname)
+
+    with rasterio.open(outputname) as output:
+        assert output.crs == {'init': 'epsg:4326'}
+        assert np.allclose(output.bounds[:],
+                           [-106.45036, 39.6138, -106.44136, 39.6278])
+        assert round(output.transform.a, 4) == 0.001
+        assert round(-output.transform.e, 4) == 0.001
+
+
 def test_warp_reproject_dst_bounds(runner, tmpdir):
     """--bounds option works."""
     srcname = 'tests/data/shade.tif'
@@ -440,7 +482,7 @@ def test_warp_reproject_nolostdata(runner, tmpdir):
         arr = output.read()
         # 50 column swath on the right edge should have some ones (gdalwarped has 7223)
         assert arr[0, :, -50:].sum() > 7000
-        assert output.crs == {'init': 'epsg:3857'}
+        assert output.crs.to_epsg() == 3857
 
 
 def test_warp_dst_crs_empty_string(runner, tmpdir):

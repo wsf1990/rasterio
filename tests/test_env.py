@@ -2,17 +2,20 @@
 # Collected here to make them easier to skip/xfail.
 
 import logging
+import os
 import sys
 
 import boto3
 import pytest
 
 import rasterio
+from rasterio import _env
 from rasterio._env import del_gdal_config, get_gdal_config, set_gdal_config
 from rasterio.env import Env, defenv, delenv, getenv, setenv, ensure_env, ensure_env_credentialled
 from rasterio.env import GDALVersion, require_gdal_version
 from rasterio.errors import EnvError, RasterioIOError, GDALVersionError
 from rasterio.rio.main import main_group
+from rasterio.session import AWSSession, OSSSession
 
 from .conftest import requires_gdal21
 
@@ -22,8 +25,6 @@ credentials = pytest.mark.skipif(
     not(boto3.Session()._session.get_credentials()),
     reason="S3 raster access requires credentials")
 
-
-logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
 L8TIF = "s3://landsat-pds/L8/139/045/LC81390452014295LGN00/LC81390452014295LGN00_B1.TIF"
 L8TIFB2 = "s3://landsat-pds/L8/139/045/LC81390452014295LGN00/LC81390452014295LGN00_B2.TIF"
@@ -113,6 +114,43 @@ def test_ensure_env_decorator(gdalenv):
     assert f() is True
 
 
+def test_ensure_env_decorator_sets_gdal_data(gdalenv, monkeypatch):
+    """ensure_env finds GDAL from environment"""
+    @ensure_env
+    def f():
+        return getenv()['GDAL_DATA']
+
+    monkeypatch.setenv('GDAL_DATA', '/lol/wut')
+    assert f() == '/lol/wut'
+
+
+def test_ensure_env_decorator_sets_gdal_data_prefix(gdalenv, monkeypatch, tmpdir):
+    """ensure_env finds GDAL data under a prefix"""
+
+    @ensure_env
+    def f():
+        return getenv()['GDAL_DATA']
+
+    tmpdir.ensure("share/gdal/pcs.csv")
+    monkeypatch.delenv('GDAL_DATA', raising=False)
+    monkeypatch.setattr(sys, 'prefix', str(tmpdir))
+
+    assert f() == str(tmpdir.join("share").join("gdal"))
+
+
+def test_ensure_env_decorator_sets_gdal_data_wheel(gdalenv, monkeypatch, tmpdir):
+    """ensure_env finds GDAL data in a wheel"""
+    @ensure_env
+    def f():
+        return getenv()['GDAL_DATA']
+
+    tmpdir.ensure("gdal_data/pcs.csv")
+    monkeypatch.delenv('GDAL_DATA', raising=False)
+    monkeypatch.setattr(_env, '__file__', str(tmpdir.join(os.path.basename(_env.__file__))))
+
+    assert f() == str(tmpdir.join("gdal_data"))
+
+
 def test_ensure_env_credentialled_decorator(monkeypatch, gdalenv):
     """Credentialization is ensured by wrapper"""
     monkeypatch.setenv('AWS_ACCESS_KEY_ID', 'id')
@@ -167,10 +205,10 @@ def test_aws_session(gdalenv):
         aws_access_key_id='id', aws_secret_access_key='key',
         aws_session_token='token', region_name='null-island-1')
     with rasterio.env.Env(session=aws_session) as s:
-        assert s._creds.access_key == 'id'
-        assert s._creds.secret_key == 'key'
-        assert s._creds.token == 'token'
-        assert s.session.region_name == 'null-island-1'
+        assert s.session._session.get_credentials().get_frozen_credentials().access_key == 'id'
+        assert s.session._session.get_credentials().get_frozen_credentials().secret_key == 'key'
+        assert s.session._session.get_credentials().get_frozen_credentials().token == 'token'
+        assert s.session._session.region_name == 'null-island-1'
 
 
 def test_aws_session_credentials(gdalenv):
@@ -314,6 +352,7 @@ def test_ensured_env_no_credentializing(gdalenv):
 
 
 @requires_gdal21(reason="S3 access requires 2.1+")
+@credentials
 @pytest.mark.network
 def test_open_https_vsicurl(gdalenv):
     """Read from HTTPS URL."""
@@ -330,7 +369,6 @@ def test_s3_rio_info(runner):
     """S3 is supported by rio-info."""
     result = runner.invoke(main_group, ['info', L8TIF])
     assert result.exit_code == 0
-    assert '"crs": "EPSG:32645"' in result.output
 
 
 @requires_gdal21(reason="S3 access requires 2.1+")
@@ -340,7 +378,6 @@ def test_https_rio_info(runner):
     """HTTPS is supported by rio-info."""
     result = runner.invoke(main_group, ['info', httpstif])
     assert result.exit_code == 0
-    assert '"crs": "EPSG:32645"' in result.output
 
 
 def test_rio_env_credentials_options(tmpdir, monkeypatch, runner):
@@ -725,3 +762,53 @@ def test_require_gdal_version_chaining():
 
     message = 'parameter "something=else" requires GDAL >= {0}'.format(version)
     assert message in exc_info.value.args[0]
+
+
+def test_rio_env_no_credentials(tmpdir, monkeypatch, runner):
+    """Confirm that we can get drivers without any credentials"""
+    credentials_file = tmpdir.join('credentials')
+    credentials_file.write("""
+[default]
+aws_secret_access_key = foo
+aws_access_key_id = bar
+""")
+    monkeypatch.setenv('AWS_SHARED_CREDENTIALS_FILE', str(credentials_file))
+    monkeypatch.delenv('AWS_ACCESS_KEY_ID', raising=False)
+    # Assert that we don't have any AWS credentials by accident.
+    with pytest.raises(Exception):
+        rasterio.open("s3://mapbox/rasterio/RGB.byte.tif")
+
+    with rasterio.Env() as env:
+        assert env.drivers()
+
+
+def test_nested_credentials(monkeypatch):
+    """Check that rasterio.open() doesn't wipe out surrounding credentials"""
+
+    @ensure_env_credentialled
+    def fake_opener(path):
+        return getenv()
+
+    with rasterio.Env(session=AWSSession(aws_access_key_id='foo', aws_secret_access_key='bar')):
+        assert getenv()['AWS_ACCESS_KEY_ID'] == 'foo'
+        assert getenv()['AWS_SECRET_ACCESS_KEY'] == 'bar'
+
+        monkeypatch.setenv('AWS_ACCESS_KEY_ID', 'lol')
+        monkeypatch.setenv('AWS_SECRET_ACCESS_KEY', 'wut')
+
+        gdalenv = fake_opener('s3://foo/bar')
+        assert gdalenv['AWS_ACCESS_KEY_ID'] == 'foo'
+        assert gdalenv['AWS_SECRET_ACCESS_KEY'] == 'bar'
+
+
+def test_oss_session_credentials(gdalenv):
+    """Create an Env with a oss session."""
+    oss_session = OSSSession(
+        oss_access_key_id='id',
+        oss_secret_access_key='key',
+        oss_endpoint='null-island-1')
+    with rasterio.env.Env(session=oss_session) as s:
+        s.credentialize()
+        assert getenv()['OSS_ACCESS_KEY_ID'] == 'id'
+        assert getenv()['OSS_SECRET_ACCESS_KEY'] == 'key'
+        assert getenv()['OSS_ENDPOINT'] == 'null-island-1'

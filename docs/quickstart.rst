@@ -194,7 +194,7 @@ dataset's upper left corner, do the following.
     >>> row, col = dataset.index(x, y)
     >>> row, col
     (1666, 3333)
-    >>> band_one[row, col]
+    >>> band1[row, col]
     7566
 
 To get the spatial coordinates of a pixel, use the dataset's ``xy()`` method.
@@ -202,7 +202,7 @@ The coordinates of the center of the image can be computed like this.
 
 .. code-block:: pycon
 
-    >>> dataset.xy(dataset.width // 2, dataset.height // 2)
+    >>> dataset.xy(dataset.height // 2, dataset.width // 2)
     (476550.0, 4149150.0)
 
 Creating data

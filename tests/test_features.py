@@ -8,7 +8,7 @@ from affine import Affine
 
 import rasterio
 from rasterio.enums import MergeAlg
-from rasterio.errors import WindowError, RasterioDeprecationWarning
+from rasterio.errors import WindowError
 from rasterio.features import (
     bounds, geometry_mask, geometry_window, is_valid_geom, rasterize, sieve,
     shapes)
@@ -29,6 +29,12 @@ def test_bounds_point():
 
 def test_bounds_line():
     g = {'type': 'LineString', 'coordinates': [[0, 0], [10, 10]]}
+    assert bounds(g) == (0, 0, 10, 10)
+    assert bounds(MockGeoInterface(g)) == (0, 0, 10, 10)
+
+
+def test_bounds_ring():
+    g = {'type': 'LinearRing', 'coordinates': [[0, 0], [10, 10], [10, 0]]}
     assert bounds(g) == (0, 0, 10, 10)
     assert bounds(MockGeoInterface(g)) == (0, 0, 10, 10)
 
@@ -90,6 +96,7 @@ def test_geometry_mask_invert(basic_geometry, basic_image_2x2):
             invert=True
         )
     )
+
 
 def test_geometry_invalid_geom():
     """An invalid geometry should fail"""
@@ -165,7 +172,7 @@ def test_geometry_window_pixel_precision(basic_image_file):
     with rasterio.open(basic_image_file) as src:
         window = geometry_window(src, [geom2], north_up=False,
                                  pixel_precision=6)
-        assert window.flatten() == (1, 2, 3, 3)
+        assert window.flatten() == (1, 2, 4, 3)
 
 
 def test_geometry_window_north_up(path_rgb_byte_tif):
@@ -183,7 +190,7 @@ def test_geometry_window_north_up(path_rgb_byte_tif):
     with rasterio.open(path_rgb_byte_tif) as src:
         window = geometry_window(src, [geometry], north_up=True)
 
-    assert window.flatten() == (326, 256, 167, 167)
+    assert window.flatten() == (326, 256, 168, 167)
 
 
 def test_geometry_window_pad(basic_image_file, basic_geometry):
@@ -295,6 +302,24 @@ def test_is_valid_geom_polygon(geojson_polygon):
     # Empty first coordinate is invalid
     geom = deepcopy(geojson_polygon)
     geom['coordinates'] = [[[]]]
+    assert not is_valid_geom(geom)
+
+
+def test_is_valid_geom_ring(geojson_polygon):
+    """Properly formed GeoJSON LinearRing is valid"""
+    geojson_ring = deepcopy(geojson_polygon)
+    geojson_ring['type'] = 'LinearRing'
+    # take first ring from polygon as sample
+    geojson_ring['coordinates'] = geojson_ring['coordinates'][0]
+    assert is_valid_geom(geojson_ring)
+
+    # Empty iterables are invalid
+    geom = deepcopy(geojson_ring)
+    geom['coordinates'] = []
+    assert not is_valid_geom(geom)
+
+    geom = deepcopy(geojson_ring)
+    geom['coordinates'] = [[]]
     assert not is_valid_geom(geom)
 
 
@@ -595,6 +620,7 @@ def test_rasterize_all_touched(basic_geometry, basic_image):
         )
     )
 
+
 def test_rasterize_merge_alg_add(basic_geometry, basic_image_2x2x2):
     """
     Rasterizing two times the basic_geometry with the "add" merging
@@ -806,6 +832,25 @@ def test_shapes_mask(basic_image):
     mask[4:5, 4:5] = False
 
     results = list(shapes(basic_image, mask=mask))
+
+    assert len(results) == 2
+
+    shape, value = results[0]
+    assert shape == {
+        'coordinates': [
+            [(2, 2), (2, 5), (4, 5), (4, 4), (5, 4), (5, 2), (2, 2)]
+        ],
+        'type': 'Polygon'
+    }
+    assert value == 1
+
+
+def test_shapes_masked_array(basic_image):
+    """Only pixels not masked out should be converted to features."""
+    mask = np.full(basic_image.shape, False, dtype=rasterio.bool_)
+    mask[4:5, 4:5] = True
+
+    results = list(shapes(np.ma.masked_array(basic_image, mask=mask)))
 
     assert len(results) == 2
 

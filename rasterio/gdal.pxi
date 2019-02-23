@@ -72,6 +72,7 @@ cdef extern from "cpl_vsi.h" nogil:
 
 cdef extern from "ogr_srs_api.h" nogil:
 
+    ctypedef int OGRErr
     ctypedef void * OGRCoordinateTransformationH
     ctypedef void * OGRSpatialReferenceH
 
@@ -83,22 +84,24 @@ cdef extern from "ogr_srs_api.h" nogil:
     int OCTTransform(OGRCoordinateTransformationH ct, int nCount, double *x,
                      double *y, double *z)
     int OSRAutoIdentifyEPSG(OGRSpatialReferenceH srs)
+    int OSRMorphFromESRI(OGRSpatialReferenceH srs)
+    int OSRMorphToESRI(OGRSpatialReferenceH srs)
     void OSRCleanup()
     OGRSpatialReferenceH OSRClone(OGRSpatialReferenceH srs)
     int OSRExportToProj4(OGRSpatialReferenceH srs, char **params)
     int OSRExportToWkt(OGRSpatialReferenceH srs, char **params)
-    int OSRFixup(OGRSpatialReferenceH srs)
     const char *OSRGetAuthorityName(OGRSpatialReferenceH srs, const char *key)
     const char *OSRGetAuthorityCode(OGRSpatialReferenceH srs, const char *key)
     int OSRImportFromEPSG(OGRSpatialReferenceH srs, int code)
     int OSRImportFromProj4(OGRSpatialReferenceH srs, const char *proj)
+    int OSRImportFromWkt(OGRSpatialReferenceH srs, char **wkt)
     int OSRIsGeographic(OGRSpatialReferenceH srs)
     int OSRIsProjected(OGRSpatialReferenceH srs)
     int OSRIsSame(OGRSpatialReferenceH srs1, OGRSpatialReferenceH srs2)
     OGRSpatialReferenceH OSRNewSpatialReference(const char *wkt)
     void OSRRelease(OGRSpatialReferenceH srs)
     int OSRSetFromUserInput(OGRSpatialReferenceH srs, const char *input)
-
+    OGRErr OSRValidate(OGRSpatialReferenceH srs)
 
 cdef extern from "gdal.h" nogil:
 
@@ -265,6 +268,10 @@ cdef extern from "gdal.h" nogil:
     char** GDALGetFileList(GDALDatasetH hDS)
     CPLErr GDALCopyDatasetFiles (GDALDriverH hDriver, const char * pszNewName, const char * pszOldName)
 
+    double GDALGetRasterScale(GDALRasterBandH hBand, int * pbSuccess)
+    double GDALGetRasterOffset(GDALRasterBandH hBand, int * pbSuccess)
+    CPLErr GDALSetRasterScale(GDALRasterBandH hBand, double dfNewScale)
+    CPLErr GDALSetRasterOffset(GDALRasterBandH hBand, double dfNewOffset)
 
 cdef extern from "ogr_api.h" nogil:
 

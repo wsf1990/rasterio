@@ -4,6 +4,7 @@ import pytest
 
 from rasterio._warp import _calculate_default_transform
 from rasterio.control import GroundControlPoint
+from rasterio.crs import CRS
 from rasterio.errors import CRSError
 from rasterio.transform import from_bounds
 from rasterio.warp import calculate_default_transform, transform_bounds
@@ -14,6 +15,27 @@ def test_gcps_bounds_exclusivity():
     with pytest.raises(ValueError):
         calculate_default_transform(
             'epsg:4326', 'epsg:3857', width=1, height=1, left=1.0, gcps=[1])
+
+
+def test_resolution_dimensions_exclusivity():
+    """resolution and dimensions parameters are mutually exclusive"""
+    with pytest.raises(ValueError):
+        calculate_default_transform(
+            'epsg:4326', 'epsg:3857', width=1, height=1, gcps=[1],
+            resolution=1, dst_width=1, dst_height=1)
+
+
+def test_dimensions_missing_params():
+    """dst_width and dst_height must be specified together"""
+    with pytest.raises(ValueError):
+        calculate_default_transform(
+            'epsg:4326', 'epsg:3857', width=1, height=1, gcps=[1],
+            resolution=1, dst_width=1, dst_height=None)
+
+    with pytest.raises(ValueError):
+        calculate_default_transform(
+            'epsg:4326', 'epsg:3857', width=1, height=1, gcps=[1],
+            resolution=1, dst_width=None, dst_height=1)
 
 
 def test_one_of_gcps_bounds():
@@ -39,7 +61,7 @@ def test_identity():
     assert res_width == width
     assert res_height == height
     for res, exp in zip(res_transform, transform):
-        assert round(res, 7) == round(exp, 7)
+        assert round(res, 3) == round(exp, 3)
 
 
 def test_identity_gcps():
@@ -67,7 +89,7 @@ def test_identity_gcps():
     assert res_width == width
     assert res_height == height
     for res, exp in zip(res_transform, transform):
-        assert round(res, 7) == round(exp, 7)
+        assert round(res, 3) == round(exp, 3)
 
 
 def test_transform_bounds():
@@ -83,8 +105,8 @@ def test_transform_bounds():
 
 def test_gdal_transform_notnull():
     dt, dw, dh = _calculate_default_transform(
-        src_crs={'init': 'EPSG:4326'},
-        dst_crs={'init': 'EPSG:32610'},
+        src_crs={'init': 'epsg:4326'},
+        dst_crs={'init': 'epsg:32610'},
         width=80,
         height=80,
         left=-120,
@@ -97,7 +119,7 @@ def test_gdal_transform_notnull():
 def test_gdal_transform_fail_dst_crs():
     with pytest.raises(CRSError):
         _calculate_default_transform(
-            {'init': 'EPSG:4326'},
+            {'init': 'epsg:4326'},
             '+proj=foobar',
             width=80,
             height=80,
@@ -111,7 +133,7 @@ def test_gdal_transform_fail_src_crs():
     with pytest.raises(CRSError):
         _calculate_default_transform(
             '+proj=foobar',
-            {'init': 'EPSG:32610'},
+            {'init': 'epsg:32610'},
             width=80,
             height=80,
             left=-120,
@@ -126,7 +148,7 @@ def test_gdal_transform_fail_src_crs():
 def test_gdal_transform_fail_dst_crs_xfail():
     with pytest.raises(CRSError):
         dt, dw, dh = _calculate_default_transform(
-            {'init': 'EPSG:4326'},
+            {'init': 'epsg:4326'},
             {'proj': 'foobar'},
             width=80,
             height=80,
@@ -146,3 +168,15 @@ def test_gcps_calculate_transform():
         'epsg:3857', 'epsg:4326', width=800, height=800, gcps=src_gcps)
     assert width == 1087
     assert height == 895
+
+
+def test_transform_bounds_identity():
+    """Confirm fix of #1411"""
+    bounds = (12978395.906596646, 146759.09430753812, 12983287.876406897, 151651.06411778927)
+    assert transform_bounds("+init=epsg:3857", "+init=epsg:3857", *bounds) == bounds
+
+
+def test_issue1131():
+    """Confirm that we don't run out of memory"""
+    transform, w, h = calculate_default_transform(CRS.from_epsg(4326), CRS.from_epsg(3857), 455880, 454450, 13.0460235139, 42.6925552354, 13.2511695428, 42.8970561511)
+    assert (w, h) == (381595, 518398)

@@ -195,8 +195,7 @@ Linux
 Rasterio distributions are available from UbuntuGIS and Anaconda's conda-forge
 channel.
 
-`Manylinux1 <https://github.com/pypa/manylinux>`__ distributions may be
-available in the future.
+`Manylinux1 <https://github.com/pypa/manylinux>`__ wheels are available on PyPI.
 
 OS X
 ++++
@@ -229,6 +228,13 @@ this from the downloads folder:
     $ pip install -U pip
     $ pip install GDAL-2.0.2-cp27-none-win32.whl
     $ pip install rasterio-0.34.0-cp27-cp27m-win32.whl
+
+You can also install rasterio with conda using Anaconda's conda-forge channel.
+
+.. code-block:: console
+
+    $ conda install -c conda-forge rasterio 
+
 
 Source Distributions
 --------------------

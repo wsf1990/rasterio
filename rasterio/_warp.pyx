@@ -6,19 +6,23 @@ include "gdal.pxi"
 import logging
 import uuid
 import warnings
+import xml.etree.ElementTree as ET
 
 from affine import identity
 import numpy as np
 
+import rasterio
 from rasterio._base import gdal_version
 from rasterio._err import (
-    CPLE_IllegalArgError, CPLE_NotSupportedError,
+    CPLE_BaseError, CPLE_IllegalArgError, CPLE_NotSupportedError,
     CPLE_AppDefinedError, CPLE_OpenFailedError)
 from rasterio import dtypes
 from rasterio.control import GroundControlPoint
 from rasterio.enums import Resampling, MaskFlags, ColorInterp
+from rasterio.env import GDALVersion
 from rasterio.crs import CRS
 from rasterio.errors import (
+    GDALOptionNotImplementedError,
     DriverRegistrationError, CRSError, RasterioIOError,
     RasterioDeprecationWarning, WarpOptionsError)
 from rasterio.transform import Affine, from_bounds, guard_transform, tastes_like_gdal
@@ -30,7 +34,7 @@ from rasterio._err cimport exc_wrap_pointer, exc_wrap_int
 from rasterio._io cimport (
     DatasetReaderBase, InMemoryRaster, in_dtype_range, io_auto)
 from rasterio._features cimport GeomBuilder, OGRGeomBuilder
-from rasterio._shim cimport delete_nodata_value
+from rasterio._shim cimport delete_nodata_value, open_dataset
 
 
 log = logging.getLogger(__name__)
@@ -67,11 +71,15 @@ def _transform_geom(
         _safe_osr_release(dst)
         raise
 
-    # Transform options.
-    valb = str(antimeridian_offset).encode('utf-8')
-    options = CSLSetNameValue(options, "DATELINEOFFSET", <const char *>valb)
-    if antimeridian_cutting:
-        options = CSLSetNameValue(options, "WRAPDATELINE", "YES")
+    if GDALVersion().runtime() < GDALVersion.parse('2.2'):
+        valb = str(antimeridian_offset).encode('utf-8')
+        options = CSLSetNameValue(options, "DATELINEOFFSET", <const char *>valb)
+        if antimeridian_cutting:
+            options = CSLSetNameValue(options, "WRAPDATELINE", "YES")
+    else:
+        # GDAL cuts on the antimeridian by default and using different
+        # logic in versions >= 2.2.
+        pass
 
     try:
         factory = new OGRGeometryFactory()
@@ -286,47 +294,16 @@ def _reproject(
     out: None
         Output is written to destination.
     """
-    cdef int retval
-    cdef int rows
-    cdef int cols
     cdef int src_count
-    cdef GDALDriverH driver = NULL
     cdef GDALDatasetH src_dataset = NULL
     cdef GDALDatasetH dst_dataset = NULL
-    cdef GDALAccess GA
-    cdef double gt[6]
-    cdef char *srcwkt = NULL
-    cdef char *dstwkt= NULL
-    cdef OGRSpatialReferenceH src_osr = NULL
-    cdef OGRSpatialReferenceH dst_osr = NULL
     cdef char **warp_extras = NULL
     cdef const char* pszWarpThread = NULL
     cdef int i
     cdef double tolerance = 0.125
-    cdef GDAL_GCP *gcplist = NULL
     cdef void *hTransformArg = NULL
     cdef GDALTransformerFunc pfnTransformer = NULL
     cdef GDALWarpOptions *psWOptions = NULL
-
-    # If working with identity transform, assume it is crs-less data
-    # and that translating the matrix very slightly will avoid #674
-    eps = 1e-100
-
-    if src_transform:
-
-        src_transform = guard_transform(src_transform)
-        # if src_transform is like `identity` with positive or negative `e`,
-        # translate matrix very slightly to avoid #674 and #1272.
-        if src_transform.almost_equals(identity) or src_transform.almost_equals(Affine(1, 0, 0, 0, -1, 0)):
-            src_transform = src_transform.translation(eps, eps)
-        src_transform = src_transform.to_gdal()
-
-    if dst_transform:
-
-        dst_transform = guard_transform(dst_transform)
-        if dst_transform.almost_equals(identity) or dst_transform.almost_equals(Affine(1, 0, 0, 0, -1, 0)):
-            dst_transform = dst_transform.translation(eps, eps)
-        dst_transform = dst_transform.to_gdal()
 
     # Validate nodata values immediately.
     if src_nodata is not None:
@@ -338,91 +315,43 @@ def _reproject(
         if not in_dtype_range(dst_nodata, destination.dtype):
             raise ValueError("dst_nodata must be in valid range for "
                              "destination dtype")
+        
+    def format_transform(in_transform):
+        if not in_transform:
+            return in_transform
+        in_transform = guard_transform(in_transform)
+        # If working with identity transform, assume it is crs-less data
+        # and that translating the matrix very slightly will avoid #674 and #1272
+        eps = 1e-100
+        if in_transform.almost_equals(identity) or in_transform.almost_equals(Affine(1, 0, 0, 0, -1, 0)):
+            in_transform = in_transform.translation(eps, eps)
+        return in_transform
 
     # If the source is an ndarray, we copy to a MEM dataset.
     # We need a src_transform and src_dst in this case. These will
     # be copied to the MEM dataset.
     if dtypes.is_ndarray(source):
+        if not src_crs:
+            raise CRSError("Missing src_crs.")
+        if src_nodata is None and hasattr(source, 'fill_value'):
+            # source is a masked array
+            src_nodata = source.fill_value
         # Convert 2D single-band arrays to 3D multi-band.
         if len(source.shape) == 2:
             source = source.reshape(1, *source.shape)
         src_count = source.shape[0]
         src_bidx = range(1, src_count + 1)
-        rows = source.shape[1]
-        cols = source.shape[2]
-        dtype = np.dtype(source.dtype).name
-
-        if src_nodata is None and hasattr(source, 'fill_value'):
-            # source is a masked array
-            src_nodata = source.fill_value
-
-        try:
-            driver = exc_wrap_pointer(GDALGetDriverByName("MEM"))
-        except:
-            raise DriverRegistrationError(
-                "'MEM' driver not found. Check that this call is contained "
-                "in a `with rasterio.Env()` or `with rasterio.open()` "
-                "block.")
-
-        datasetname = str(uuid.uuid4()).encode('utf-8')
-        src_dataset = exc_wrap_pointer(
-            GDALCreate(driver, <const char *>datasetname, cols, rows,
-                       src_count, dtypes.dtype_rev[dtype], NULL))
-
-        GDALSetDescription(
-            src_dataset, "Temporary source dataset for _reproject()")
-
-        log.debug("Created temp source dataset")
-
-        try:
-            src_osr = _osr_from_crs(src_crs)
-            OSRExportToWkt(src_osr, &srcwkt)
-
-            if src_transform:
-                for i in range(6):
-                    gt[i] = src_transform[i]
-
-                exc_wrap_int(GDALSetGeoTransform(src_dataset, gt))
-
-                exc_wrap_int(GDALSetProjection(src_dataset, srcwkt))
-
-                log.debug("Set CRS on temp source dataset: %s", srcwkt)
-
-            elif gcps:
-                gcplist = <GDAL_GCP *>CPLMalloc(len(gcps) * sizeof(GDAL_GCP))
-                try:
-                    for i, obj in enumerate(gcps):
-                        ident = str(i).encode('utf-8')
-                        info = "".encode('utf-8')
-                        gcplist[i].pszId = ident
-                        gcplist[i].pszInfo = info
-                        gcplist[i].dfGCPPixel = obj.col
-                        gcplist[i].dfGCPLine = obj.row
-                        gcplist[i].dfGCPX = obj.x
-                        gcplist[i].dfGCPY = obj.y
-                        gcplist[i].dfGCPZ = obj.z or 0.0
-
-                    exc_wrap_int(GDALSetGCPs(src_dataset, len(gcps), gcplist, srcwkt))
-                finally:
-                    CPLFree(gcplist)
-
-        finally:
-            CPLFree(srcwkt)
-            _safe_osr_release(src_osr)
-
-        # Copy arrays to the dataset.
-        exc_wrap_int(io_auto(source, src_dataset, 1))
-
-        log.debug("Wrote array to temp source dataset")
-
+        src_dataset = InMemoryRaster(image=source,
+                                     transform=format_transform(src_transform),
+                                     gcps=gcps,
+                                     crs=src_crs).handle()
     # If the source is a rasterio MultiBand, no copy necessary.
-    # A MultiBand is a tuple: (dataset, bidx, dtype, shape(2d)).
+    # A MultiBand is a tuple: (dataset, bidx, dtype, shape(2d))
     elif isinstance(source, tuple):
         rdr, src_bidx, dtype, shape = source
         if isinstance(src_bidx, int):
             src_bidx = [src_bidx]
         src_count = len(src_bidx)
-        rows, cols = shape
         src_dataset = (<DatasetReaderBase?>rdr).handle()
         if src_nodata is None:
             src_nodata = rdr.nodata
@@ -431,55 +360,36 @@ def _reproject(
 
     # Next, do the same for the destination raster.
     if dtypes.is_ndarray(destination):
+        if not dst_crs:
+            raise CRSError("Missing dst_crs.")
         if len(destination.shape) == 2:
             destination = destination.reshape(1, *destination.shape)
-            dst_bidx = [1]
+
+        if destination.shape[0] == src_count:
+            # Output shape matches number of bands being extracted
+            dst_bidx = [i + 1 for i in range(src_count)]
         else:
+            # Assume src and dst are the same shape
+            if max(src_bidx) > destination.shape[0]:
+                raise ValueError("Invalid destination shape")
             dst_bidx = src_bidx
 
-        if destination.shape[0] != src_count:
-            raise ValueError("Destination's shape is invalid")
+        dst_dataset = InMemoryRaster(image=destination,
+                                     transform=format_transform(dst_transform),
+                                     crs=dst_crs).handle()
+        if dst_alpha:
+            for i in range(destination.shape[0]):
+                try:
+                    delete_nodata_value(GDALGetRasterBand(dst_dataset, i+1))
+                except NotImplementedError as exc:
+                    log.warn(str(exc))
 
-        try:
-            driver = exc_wrap_pointer(GDALGetDriverByName("MEM"))
-        except:
-            raise DriverRegistrationError(
-                "'MEM' driver not found. Check that this call is contained "
-                "in a `with rasterio.Env()` or `with rasterio.open()` "
-                "block.")
-
-        _, rows, cols = destination.shape
-
-        datasetname = str(uuid.uuid4()).encode('utf-8')
-        dst_dataset = exc_wrap_pointer(
-            GDALCreate(driver, <const char *>datasetname, cols, rows,
-                src_count,
-                dtypes.dtype_rev[np.dtype(destination.dtype).name], NULL))
+            GDALSetRasterColorInterpretation(GDALGetRasterBand(dst_dataset, dst_alpha), <GDALColorInterp>6)
 
         GDALSetDescription(
             dst_dataset, "Temporary destination dataset for _reproject()")
 
         log.debug("Created temp destination dataset.")
-
-        for i in range(6):
-            gt[i] = dst_transform[i]
-
-        exc_wrap_int(GDALSetGeoTransform(dst_dataset, gt))
-
-        try:
-            dst_osr = _osr_from_crs(dst_crs)
-            OSRExportToWkt(dst_osr, &dstwkt)
-
-            log.debug("CRS for temp destination dataset: %s.", dstwkt)
-
-            exc_wrap_int(GDALSetProjection(dst_dataset, dstwkt))
-        finally:
-            CPLFree(dstwkt)
-            _safe_osr_release(dst_osr)
-
-        exc_wrap_int(io_auto(destination, dst_dataset, 1))
-
-        log.debug("Wrote array to temp output dataset")
 
         if dst_nodata is None:
             if hasattr(destination, "fill_value"):
@@ -492,7 +402,6 @@ def _reproject(
         udr, dst_bidx, _, _ = destination
         if isinstance(dst_bidx, int):
             dst_bidx = [dst_bidx]
-        udr = destination.ds
         dst_dataset = (<DatasetReaderBase?>udr).handle()
         if dst_nodata is None:
             dst_nodata = udr.nodata
@@ -560,11 +469,18 @@ def _reproject(
     psWOptions.hSrcDS = src_dataset
     psWOptions.hDstDS = dst_dataset
 
+    for idx, (s, d) in enumerate(zip(src_bidx, dst_bidx)):
+        psWOptions.panSrcBands[idx] = s
+        psWOptions.panDstBands[idx] = d
+        log.debug('Configured to warp src band %d to destination band %d' % (s, d))
+
     log.debug("Set transformer options")
 
     # Now that the transformer and warp options are set up, we init
     # and run the warper.
     cdef GDALWarpOperation oWarper
+    cdef int rows
+    cdef int cols
     try:
         exc_wrap_int(oWarper.Initialize(psWOptions))
         rows, cols = destination.shape[-2:]
@@ -607,7 +523,7 @@ def _calculate_default_transform(src_crs, dst_crs, width, height,
     cdef double geotransform[6]
     cdef OGRSpatialReferenceH osr = NULL
     cdef char *wkt = NULL
-    cdef InMemoryRaster temp = None
+    cdef GDALDatasetH hds = NULL
 
     extent[:] = [0.0, 0.0, 0.0, 0.0]
     geotransform[:] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -623,40 +539,54 @@ def _calculate_default_transform(src_crs, dst_crs, width, height,
     else:
         transform = None
 
-    osr = _osr_from_crs(dst_crs)
-    OSRExportToWkt(osr, &wkt)
-    _safe_osr_release(osr)
+    try:
+        osr = _osr_from_crs(dst_crs)
+        exc_wrap_int(OSRExportToWkt(osr, &wkt))
+    except CPLE_BaseError as exc:
+        raise CRSError("Could not convert to WKT. {}".format(str(exc)))
+    finally:
+        _safe_osr_release(osr)
 
-    with InMemoryRaster(width=width, height=height, transform=transform,
-                        gcps=gcps, crs=src_crs) as temp:
+    if isinstance(src_crs, str):
+        src_crs = CRS.from_string(src_crs)
+    elif isinstance(src_crs, dict):
+        src_crs = CRS(**src_crs)
+
+    vrt_doc = _suggested_proxy_vrt_doc(width, height, transform=transform, crs=src_crs, gcps=gcps).decode('ascii')
+
+    try:
         try:
-            hTransformArg = exc_wrap_pointer(
-                GDALCreateGenImgProjTransformer(
-                    temp._hds, NULL, NULL, wkt, 1, 1000.0,0))
-            exc_wrap_int(
-                GDALSuggestedWarpOutput2(
-                    temp._hds, GDALGenImgProjTransform, hTransformArg,
-                    geotransform, &npixels, &nlines, extent, 0))
+            hds = open_dataset(vrt_doc, 0x00 | 0x02 | 0x04, ['VRT'], {}, None)
+        except GDALOptionNotImplementedError:
+            hds = open_dataset(vrt_doc, 0x00 | 0x02 | 0x04, None, None, None)
 
-            log.debug("Created transformer and warp output.")
+        hTransformArg = exc_wrap_pointer(
+            GDALCreateGenImgProjTransformer(
+                hds, NULL, NULL, wkt, 1, 1000.0,0))
+        exc_wrap_int(
+            GDALSuggestedWarpOutput2(
+                hds, GDALGenImgProjTransform, hTransformArg,
+                geotransform, &npixels, &nlines, extent, 0))
 
-        except CPLE_NotSupportedError as err:
-            raise CRSError(err.errmsg)
+        log.debug("Created transformer and warp output.")
 
-        except CPLE_AppDefinedError as err:
-            if "Reprojection failed" in str(err):
-                # This "exception" should be treated as a debug msg, not error
-                # "Reprojection failed, err = -14, further errors will be
-                # suppressed on the transform object."
-                log.info("Encountered points outside of valid dst crs region")
-                pass
-            else:
-                raise err
-        finally:
-            if wkt != NULL:
-                CPLFree(wkt)
-            if hTransformArg != NULL:
-                GDALDestroyGenImgProjTransformer(hTransformArg)
+    except CPLE_NotSupportedError as err:
+        raise CRSError(err.errmsg)
+
+    except CPLE_AppDefinedError as err:
+        if "Reprojection failed" in str(err):
+            # This "exception" should be treated as a debug msg, not error
+            # "Reprojection failed, err = -14, further errors will be
+            # suppressed on the transform object."
+            log.info("Encountered points outside of valid dst crs region")
+            pass
+        else:
+            raise err
+    finally:
+        if wkt != NULL:
+            CPLFree(wkt)
+        if hTransformArg != NULL:
+            GDALDestroyGenImgProjTransformer(hTransformArg)
 
     # Convert those modified arguments to Python values.
     dst_affine = Affine.from_gdal(*[geotransform[i] for i in range(6)])
@@ -666,11 +596,14 @@ def _calculate_default_transform(src_crs, dst_crs, width, height,
     return dst_affine, dst_width, dst_height
 
 
+DEFAULT_NODATA_FLAG = object()
+
+
 cdef class WarpedVRTReaderBase(DatasetReaderBase):
 
     def __init__(self, src_dataset, src_crs=None, dst_crs=None, crs=None,
                  resampling=Resampling.nearest, tolerance=0.125,
-                 src_nodata=None, dst_nodata=None, nodata=None,
+                 src_nodata=DEFAULT_NODATA_FLAG, dst_nodata=None, nodata=DEFAULT_NODATA_FLAG,
                  dst_width=None, width=None, dst_height=None, height=None,
                  src_transform=None, dst_transform=None, transform=None,
                  init_dest_nodata=True, src_alpha=0, add_alpha=False,
@@ -686,7 +619,8 @@ cdef class WarpedVRTReaderBase(DatasetReaderBase):
         src_transfrom : Affine, optional
             Overrides the transform of `src_dataset`.
         src_nodata : float, optional
-            Overrides the nodata value of `src_dataset`.
+            Overrides the nodata value of `src_dataset`, which is the
+            default.
         crs : CRS or str, optional
             The coordinate reference system at the end of the warp
             operation.  Default: the crs of `src_dataset`. dst_crs is
@@ -801,8 +735,8 @@ cdef class WarpedVRTReaderBase(DatasetReaderBase):
         self.resampling = resampling
         self.tolerance = tolerance
 
-        self.src_nodata = self.src_dataset.nodata if src_nodata is None else src_nodata
-        self.dst_nodata = self.src_nodata if nodata is None else nodata
+        self.src_nodata = self.src_dataset.nodata if src_nodata is DEFAULT_NODATA_FLAG else src_nodata
+        self.dst_nodata = self.src_nodata if nodata is DEFAULT_NODATA_FLAG else nodata
         self.dst_width = width
         self.dst_height = height
         self.dst_transform = transform
@@ -1009,3 +943,32 @@ cdef class WarpedVRTReaderBase(DatasetReaderBase):
             raise ValueError("WarpedVRT does not permit boundless reads")
         else:
             return super(WarpedVRTReaderBase, self).read_masks(indexes=indexes, out=out, window=window, out_shape=out_shape, resampling=resampling)
+
+
+def _suggested_proxy_vrt_doc(width, height, transform=None, crs=None, gcps=None):
+    """Make a VRT XML document to serve _calculate_default_transform."""
+    vrtdataset = ET.Element('VRTDataset')
+    vrtdataset.attrib['rasterYSize'] = str(height)
+    vrtdataset.attrib['rasterXSize'] = str(width)
+    vrtrasterband = ET.SubElement(vrtdataset, 'VRTRasterBand')
+
+    srs = ET.SubElement(vrtdataset, 'SRS')
+    srs.text = crs.wkt if crs else ""
+
+    if gcps:
+        gcplist = ET.SubElement(vrtdataset, 'GCPList')
+        gcplist.attrib['Projection'] = crs.wkt if crs else ""
+        for point in gcps:
+            gcp = ET.SubElement(gcplist, 'GCP')
+            gcp.attrib['Id'] = str(point.id)
+            gcp.attrib['Info'] = str(point.info)
+            gcp.attrib['Pixel'] = str(point.col)
+            gcp.attrib['Line'] = str(point.row)
+            gcp.attrib['X'] = str(point.x)
+            gcp.attrib['Y'] = str(point.y)
+            gcp.attrib['Z'] = str(point.z)
+    else:
+        geotransform = ET.SubElement(vrtdataset, 'GeoTransform')
+        geotransform.text = ','.join([str(v) for v in transform.to_gdal()])
+
+    return ET.tostring(vrtdataset)

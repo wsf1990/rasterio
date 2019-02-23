@@ -11,7 +11,7 @@ from rasterio._io import (
     DatasetReaderBase, DatasetWriterBase, BufferedDatasetWriterBase,
     MemoryFileBase)
 from rasterio.windows import WindowMethodsMixin
-from rasterio.env import ensure_env
+from rasterio.env import ensure_env, env_ctx_if_needed
 from rasterio.transform import TransformMethodsMixin
 from rasterio.path import UnparsedPath
 
@@ -130,15 +130,18 @@ class MemoryFile(MemoryFileBase):
             return DatasetReader(vsi_path, driver=driver, **kwargs)
         else:
             writer = get_writer_for_driver(driver)
-            return writer(vsi_path, 'w', driver=driver, width=width,
+            return writer(vsi_path, 'w+', driver=driver, width=width,
                           height=height, count=count, crs=crs,
                           transform=transform, dtype=dtype,
                           nodata=nodata, **kwargs)
 
     def __enter__(self):
+        self._env = env_ctx_if_needed()
+        self._env.__enter__()
         return self
 
     def __exit__(self, *args, **kwargs):
+        self._env.__exit__()
         self.close()
 
 
@@ -175,6 +178,8 @@ class ZipMemoryFile(MemoryFile):
 
 def get_writer_for_driver(driver):
     """Return the writer class appropriate for the specified driver."""
+    if not driver:
+        raise ValueError("'driver' is required to write dataset.")
     cls = None
     if driver_can_create(driver):
         cls = DatasetWriter
